@@ -27,6 +27,8 @@ backend/npm-servers/*/node_modules/
 frontend/dist/
 # Bundled uv binaries (downloaded during build)
 backend/uv-bin/
+# Backend Python venv (created by run.ps1 / backend/run.sh)
+backend/.venv/
 .account-factory
 openswarm-cloud
 .openswarm-cloud

@@ -242,6 +242,29 @@ try {
     }
 
     if ($Publish) {
+        # Safety check: warn if the matching Mac release isn't on GitHub yet.
+        # Mac and Windows publishes don't conflict (different asset names,
+        # different latest*.yml manifests), but a Windows-only release means
+        # Mac users will skip this version entirely. Better to know now than
+        # explain it after the fact. Non-fatal; sleeps 8s to let the user
+        # Ctrl+C if it surprises them.
+        try {
+            $pkgJson = Get-Content -Raw (Join-Path $ProjectRoot 'electron\package.json') | ConvertFrom-Json
+            $version = $pkgJson.version
+            $macYmlUrl = "https://github.com/openswarm-ai/openswarm/releases/download/v$version/latest-mac.yml"
+            $null = Invoke-WebRequest -Uri $macYmlUrl -Method Head -UseBasicParsing -ErrorAction Stop -TimeoutSec 10
+            Write-Host "  > Mac release v$version detected on GitHub (latest-mac.yml present). OK to proceed."
+        } catch {
+            Write-Host ""
+            Write-Host "WARNING: Mac release v$version is NOT yet published on GitHub." -ForegroundColor Yellow
+            Write-Host "  -> Uploading Windows assets to a release with no Mac assets means" -ForegroundColor Yellow
+            Write-Host "     Mac users will skip v$version entirely (electron-updater on Mac" -ForegroundColor Yellow
+            Write-Host "     will see no latest-mac.yml). Recommended order:" -ForegroundColor Yellow
+            Write-Host "       1. bash publish.sh   (on the Mac)" -ForegroundColor Yellow
+            Write-Host "       2. pwsh publish-win.ps1   (here)" -ForegroundColor Yellow
+            Write-Host "  -> Continuing in 8s. Press Ctrl+C to abort." -ForegroundColor Yellow
+            Start-Sleep -Seconds 8
+        }
         & npx electron-builder --win --x64 --publish always
     } else {
         & npx electron-builder --win --x64 --publish never

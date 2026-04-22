@@ -15,7 +15,23 @@ from backend.apps.analytics.collector import init as init_collector, shutdown as
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "1.0.24"
+def _read_app_version() -> str:
+    """Read app version from electron/package.json so we never have to bump
+    it in two places. Falls back to a literal if the file isn't reachable
+    (e.g. unusual layouts in tests)."""
+    import json
+    try:
+        _here = os.path.dirname(os.path.abspath(__file__))
+        # backend/apps/analytics/ -> backend/apps/ -> backend/ -> repo root
+        _repo = os.path.dirname(os.path.dirname(os.path.dirname(_here)))
+        _pkg = os.path.join(_repo, "electron", "package.json")
+        with open(_pkg, encoding="utf-8") as _f:
+            return json.load(_f).get("version", "unknown")
+    except (OSError, ValueError, KeyError):
+        return "unknown"
+
+
+APP_VERSION = _read_app_version()
 
 _heartbeat_task: asyncio.Task | None = None
 

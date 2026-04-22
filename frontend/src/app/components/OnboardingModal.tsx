@@ -858,28 +858,31 @@ const OnboardingModal: React.FC = () => {
               Use your existing subscription
             </Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mb: 2.5 }}>
-              {SUBSCRIPTION_PROVIDERS.map((p) => (
+              {SUBSCRIPTION_PROVIDERS.map((p) => {
+                const isConnected = connectedProviders.has(p.id);
+                return (
                 <Box
                   key={p.id}
-                  onClick={() => !p.preview && !connecting && nineRouterReady && handleConnect(p.id)}
+                  onClick={() => !p.preview && !connecting && nineRouterReady && !isConnected && handleConnect(p.id)}
                   sx={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    p: 1.5, borderRadius: `${c.radius.md}px`, border: `1px solid ${c.border.subtle}`,
-                    cursor: p.preview || !nineRouterReady ? 'default' : connecting ? 'wait' : 'pointer',
+                    p: 1.5, borderRadius: `${c.radius.md}px`, border: `1px solid ${isConnected ? c.accent.primary : c.border.subtle}`,
+                    cursor: p.preview || !nineRouterReady || isConnected ? 'default' : connecting ? 'wait' : 'pointer',
                     opacity: p.preview ? 0.5 : !nineRouterReady ? 0.6 : 1,
                     transition: 'border-color 0.15s, background 0.15s',
-                    ...(!p.preview && nineRouterReady && { '&:hover': { borderColor: c.border.medium, bgcolor: `${c.accent.primary}05` } }),
+                    ...(!p.preview && nineRouterReady && !isConnected && { '&:hover': { borderColor: c.border.medium, bgcolor: `${c.accent.primary}05` } }),
                   }}
                 >
                   <Box>
                     <Typography sx={{ fontSize: '0.92rem', fontWeight: 600, color: c.text.primary }}>{p.name}</Typography>
                     <Typography sx={{ fontSize: '0.75rem', color: c.text.muted }}>{p.desc}</Typography>
                   </Box>
-                  <Typography sx={{ fontSize: '0.78rem', color: p.preview ? c.text.ghost : connecting === p.id ? c.accent.primary : !nineRouterReady ? c.text.ghost : c.text.tertiary, fontStyle: p.preview ? 'italic' : 'normal' }}>
-                    {p.preview ? 'Coming soon' : connecting === p.id ? 'Connecting...' : !nineRouterReady && nineRouterReady !== false ? 'Starting...' : 'Connect \u2192'}
+                  <Typography sx={{ fontSize: '0.78rem', color: p.preview ? c.text.ghost : isConnected ? c.accent.primary : connecting === p.id ? c.accent.primary : !nineRouterReady ? c.text.ghost : c.text.tertiary, fontStyle: p.preview ? 'italic' : 'normal' }}>
+                    {p.preview ? 'Coming soon' : isConnected ? 'Connected' : connecting === p.id ? 'Connecting...' : !nineRouterReady && nineRouterReady !== false ? 'Starting...' : 'Connect \u2192'}
                   </Typography>
                 </Box>
-              ))}
+                );
+              })}
             </Box>
 
             {/* API key option */}
