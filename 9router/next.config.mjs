@@ -21,14 +21,10 @@ const nextConfig = {
     // back on themselves and cause `EPERM: operation not permitted, scandir`
     // on GitHub Actions runners (cascades into FlightClientEntryPlugin
     // crash). Local Windows users with normal accounts don't hit this.
+    // Single regex (webpack rejects mixed regex + glob strings in array).
     config.watchOptions = {
       ...config.watchOptions,
-      ignored: [
-        /[\\/](logs|\.next)[\\/]/,
-        '**/Application Data/**',
-        '**/Local Settings/**',
-        '**/AppData/Local/Application Data/**',
-      ],
+      ignored: /[\\/](logs|\.next|Application Data|Local Settings)[\\/]/,
     };
     // Disable webpack's user-profile + node_modules snapshotting that
     // triggers the same EPERM scan during `next build` on CI Windows.
