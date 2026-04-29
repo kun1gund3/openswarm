@@ -75,11 +75,11 @@ BUILTIN_MODELS: dict[str, list[dict[str, Any]]] = {
         # BOTH openswarm-pro active AND the 9Router `claude` subscription
         # connected — so the model picker can offer a per-call choice between
         # the managed OpenSwarm proxy and their own Claude subscription.
-        {"value": "sonnet-cc", "label": "Claude Sonnet 4.6 (Pro/Max)", "context_window": 1_000_000,
+        {"value": "sonnet-cc", "label": "Claude Sonnet 4.6", "context_window": 1_000_000,
          "model_id": "claude-sonnet-4-6", "router_model_id": "cc/claude-sonnet-4-6", "api": "anthropic", "reasoning": True, "route": "cc"},
-        {"value": "opus-cc", "label": "Claude Opus 4.6 (Pro/Max)", "context_window": 1_000_000,
+        {"value": "opus-cc", "label": "Claude Opus 4.6", "context_window": 1_000_000,
          "model_id": "claude-opus-4-6", "router_model_id": "cc/claude-opus-4-6", "api": "anthropic", "reasoning": True, "route": "cc"},
-        {"value": "haiku-cc", "label": "Claude Haiku 4.5 (Pro/Max)", "context_window": 200_000,
+        {"value": "haiku-cc", "label": "Claude Haiku 4.5", "context_window": 200_000,
          "model_id": "claude-haiku-4-5", "router_model_id": "cc/claude-haiku-4-5-20251001", "api": "anthropic", "reasoning": True, "route": "cc"},
       
         {"value": "sonnet-api", "label": "Claude Sonnet 4.6 (API key)", "context_window": 1_000_000,

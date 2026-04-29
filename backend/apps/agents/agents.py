@@ -406,7 +406,8 @@ async def list_models():
         # Always show the OpenSwarm Pro group. Then layer on whatever
         # alternate Anthropic credentials the user has (claude-sub via cc/,
         # api-key via direct). Both variants live under "Anthropic" — the
-        # labels disambiguate ("(Pro/Max)" vs "(API key)").
+        # group header disambiguates against "OpenSwarm Pro"; api-key
+        # variants keep an "(API key)" suffix to distinguish from cc/.
         result["OpenSwarm Pro"] = _serialize(adaptive)
         anth_alternates: list[dict] = []
         if has_claude_sub:
