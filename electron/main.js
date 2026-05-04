@@ -653,8 +653,11 @@ function sendToRenderer(channel, ...args) {
 
 function setupAutoUpdater() {
   if (!autoUpdater) return;
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = false;
+  // Silent background updates: download on detect, install on next quit.
+  // The OS gates the install on main-process exit (can't replace a
+  // running .app / locked .exe), so an active session is never disrupted.
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on('update-available', (info) => {
     console.log(`Update available: ${info.version}`);
@@ -688,6 +691,14 @@ function setupAutoUpdater() {
   autoUpdater.checkForUpdates().catch((err) => {
     console.log('Update check skipped:', err.message);
   });
+
+  // Always-on users (lid never closes) miss the once-at-startup check
+  // above. Re-check every 4h; coalesces if a download is already cached.
+  setInterval(() => {
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.log('Periodic update check failed:', err.message);
+    });
+  }, 4 * 60 * 60 * 1000);
 }
 
 function killBackend() {
