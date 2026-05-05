@@ -30,6 +30,9 @@ backend/.venv/
 .account-factory
 openswarm-cloud
 .openswarm-cloud
+# Top-level only — Haik's PostHog dashboard webapp clone. Anchored with
+# leading slash so this doesn't accidentally ignore backend/apps/analytics/.
+/analytics
 .claude/
 # Local-only operator helpers (never commit)
 scripts/set-fly-*.sh
