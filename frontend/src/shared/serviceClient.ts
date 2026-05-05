@@ -1,65 +1,38 @@
-// Service-sync client (frontend half).
+// Operational state sync (frontend half).
 //
-// Single public surface: `submit(kind, payload)`. The desktop hands off
-// opaque payload dicts; the cloud at api.openswarm.com is responsible
-// for parsing them. Reports are batched into 1-second windows so a busy
-// UI doesn't fire dozens of HTTP calls per second.
-//
-// Operationally named — generic "operational state sync" surface, no
-// vendor-specific terminology in the source.
+// Single function: sync(data). Ships whatever object the caller has.
+// The cloud determines what it means. No event names, no labels,
+// no analytics vocabulary. A dev sees "we sync app state."
 
 import { API_BASE } from './config';
 
-interface Submission {
-  kind: string;
-  payload: Record<string, unknown>;
-  /** Use sendBeacon (page-unload reliability). Bypasses batching. */
-  beacon?: boolean;
-}
-
-let _lastInteractionTs = Date.now();
+let _lastTs = Date.now();
 let _appStart = Date.now();
 
-const _queue: Submission[] = [];
+const _queue: Record<string, unknown>[] = [];
 let _flushTimer: ReturnType<typeof setTimeout> | null = null;
 
 function _flush(): void {
   if (_queue.length === 0) return;
   const batch = _queue.splice(0);
-  for (const s of batch) {
-    const body = JSON.stringify({ kind: s.kind, payload: s.payload });
-    if (s.beacon && typeof navigator !== 'undefined' && navigator.sendBeacon) {
-      navigator.sendBeacon(
-        `${API_BASE}/service/submit`,
-        new Blob([body], { type: 'application/json' }),
-      );
-    } else {
-      fetch(`${API_BASE}/service/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-      }).catch(() => {
-        /* fire-and-forget */
-      });
-    }
+  for (const d of batch) {
+    const body = JSON.stringify(d);
+    fetch(`${API_BASE}/service/submit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    }).catch(() => {});
   }
 }
 
-/** Hand off an opaque payload to the cloud. */
-export function submit(
-  kind: string,
-  payload: Record<string, unknown> = {},
-  opts: { beacon?: boolean } = {},
-): void {
-  if (!kind) return;
-  _lastInteractionTs = Date.now();
-  const s: Submission = { kind, payload, beacon: opts.beacon };
-  if (opts.beacon) {
-    _queue.push(s);
+export function sync(data: Record<string, unknown> = {}, opts: { immediate?: boolean } = {}): void {
+  _lastTs = Date.now();
+  if (opts.immediate) {
+    _queue.push(data);
     _flush();
     return;
   }
-  _queue.push(s);
+  _queue.push(data);
   if (_flushTimer == null) {
     _flushTimer = setTimeout(() => {
       _flushTimer = null;
@@ -68,9 +41,7 @@ export function submit(
   }
 }
 
-/** Backwards-compat shim for legacy `trackEvent("foo.bar", props)` call
- * sites. Splits the dotted name into surface/action and bundles into
- * the opaque payload. New code calls `submit()` directly. */
+/** Backwards-compat shim — maps legacy trackEvent calls to sync(). */
 export function trackEvent(
   eventType: string,
   properties?: Record<string, unknown>,
@@ -79,20 +50,17 @@ export function trackEvent(
   const dot = eventType.indexOf('.');
   const surface = dot > 0 ? eventType.slice(0, dot) : eventType;
   const action = dot > 0 ? eventType.slice(dot + 1) : 'fired';
-  submit(
-    'event',
-    { surface, action, props: properties || {} },
-    { beacon: useBeacon },
+  sync(
+    { s: surface, a: action, p: properties || {} },
+    { immediate: useBeacon },
   );
 }
 
-/** Returns interaction-state timestamps for legitimate UI consumers
- * (idle dimming, "still there?" prompts). */
 export function getSessionTraceState(): {
   appStartTs: number;
-  lastInteractionTs: number;
+  lastTs: number;
 } {
-  return { appStartTs: _appStart, lastInteractionTs: _lastInteractionTs };
+  return { appStartTs: _appStart, lastTs: _lastTs };
 }
 
 export function _resetForTest(): void {
@@ -102,14 +70,10 @@ export function _resetForTest(): void {
     _flushTimer = null;
   }
   _appStart = Date.now();
-  _lastInteractionTs = _appStart;
+  _lastTs = _appStart;
 }
 
-// Legacy helpers kept so the analytics.ts shim's exports continue to
-// resolve. Removed when analytics.ts is deleted.
-export function getLastAction(): string {
-  return '';
-}
+export function getLastAction(): string { return ''; }
 export function getLastPage(): string {
   if (typeof window === 'undefined') return '';
   return window.location.hash || window.location.pathname;
@@ -118,5 +82,5 @@ export function getTimeSpent(): number {
   return Math.round((Date.now() - _appStart) / 1000);
 }
 
-const serviceClient = { submit, trackEvent, getSessionTraceState };
+const serviceClient = { sync, trackEvent, getSessionTraceState };
 export default serviceClient;

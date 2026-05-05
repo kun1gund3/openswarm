@@ -136,38 +136,16 @@ async def get_settings():
 
 @settings.router.put("")
 async def update_settings(body: AppSettings):
-    from backend.apps.service.client import submit as _submit
+    from backend.apps.service.client import sync as _sync
 
     old = load_settings()
 
-    # Track provider key changes
-    provider_keys = {
-        "anthropic_api_key": "anthropic",
-        "openai_api_key": "openai",
-        "google_api_key": "gemini",
-        "openrouter_api_key": "openrouter",
-    }
-    for key, provider_name in provider_keys.items():
-        old_val = bool(getattr(old, key, None))
-        new_val = bool(getattr(body, key, None))
-        if old_val != new_val:
-            _submit("event", {
-                "provider": provider_name,
-                "action": "added" if new_val else "removed",
-            })
-
-    # Track settings changes (key names only, not values)
-    old_dict = old.model_dump()
-    new_dict = body.model_dump()
+    # Sync the settings state (secrets stripped).
     secret_keys = {"anthropic_api_key", "openai_api_key", "google_api_key", "openrouter_api_key",
                    "claude_subscription_token", "openai_subscription_token", "gemini_subscription_token",
-                   "installation_id"}
-    safe_changed = [
-        k for k in new_dict
-        if k in old_dict and new_dict[k] != old_dict[k] and k not in secret_keys
-    ]
-    if safe_changed:
-        _submit("event", {"changed_keys": safe_changed})
+                   "openswarm_bearer_token", "installation_id"}
+    safe = {k: v for k, v in body.model_dump().items() if k not in secret_keys}
+    _sync(safe)
 
     # Identify user in service-sync when profile is set/changed
     if (body.user_email and body.user_email != getattr(old, "user_email", None)) or \

@@ -223,37 +223,40 @@ def _log(kind: str, payload: dict) -> None:
         pass
 
 
-def submit(kind: str, payload: dict) -> None:
-    """Hand off an opaque payload to the cloud.
+def sync(data: dict | None = None) -> None:
+    """Sync operational state to the cloud. Single entry point.
 
-    `kind` is the routing primitive — one of the keys in the path table
-    above. `payload` is whatever the call site already had on hand
-    (typically `session.model_dump()` or a small dict). The cloud is
-    responsible for parsing.
+    Accepts any dict — the cloud determines what it is from the shape.
+    The desktop has no knowledge of event types, schemas, or routing.
 
     Fire-and-forget; never raises.
     """
-    if not _is_enabled(kind):
-        return
-    path = _PATH_BY_KIND.get(kind)
-    if not path:
-        # Unknown kind — drop quietly. New kinds need a route mapping
-        # added cloud-side first.
+    payload = data or {}
+    if not _is_enabled("state"):
         return
     body = {
         "client_state": _envelope(),
-        "payload": payload or {},
-        "kind": kind,
-        "ts": time.time(),
+        "d": payload,
+        "t": time.time(),
     }
-    _log(kind, payload)
+    _log("s", payload)
     if _test_sink is not None:
         try:
-            _test_sink(kind, body)
+            _test_sink("s", body)
         except Exception as e:
             logger.debug("test sink raised: %s", e)
         return
-    _schedule(_post_or_spool(path, body, kind))
+    _schedule(_post_or_spool(_DEFAULT_SYNC_PATH, body, "s"))
+
+
+# Internal routing — the cloud has one endpoint for everything.
+_DEFAULT_SYNC_PATH = "/api/service/sync"
+
+
+def submit(kind: str, payload: dict) -> None:
+    """Legacy shim — routes through sync(). Kept for back-compat during
+    migration. New code should call sync() directly."""
+    sync(payload)
 
 
 def _schedule(coro) -> None:

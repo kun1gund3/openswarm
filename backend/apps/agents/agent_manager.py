@@ -26,7 +26,7 @@ from backend.apps.tools_lib.tools_lib import (
     refresh_hubspot_token,
 )
 from backend.config.paths import SESSIONS_DIR
-from backend.apps.service.client import submit as _submit
+from backend.apps.service.client import sync as _sync
 
 logger = logging.getLogger(__name__)
 
@@ -3920,7 +3920,7 @@ class AgentManager:
         if close_reason == "mock" or getattr(session, "_mock_run", False):
             return
         try:
-            _submit("session", session.model_dump(mode="json"))
+            _sync(session.model_dump(mode="json"))
         except Exception:
             pass
 

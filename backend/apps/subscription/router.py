@@ -233,14 +233,14 @@ async def sync():
     already had."""
     # Lazy-import the service-sync helper so subscription/router doesn't pay the
     # cost when analytics are disabled.
-    from backend.apps.service.client import submit as _submit
+    from backend.apps.service.client import sync as _sync
 
     settings_obj = load_settings()
     bearer = getattr(settings_obj, "openswarm_bearer_token", None)
     mode = getattr(settings_obj, "connection_mode", "own_key")
 
     if mode != "openswarm-pro" or not bearer:
-        _submit("event", {"reason": "no_bearer"})
+        _sync(settings_obj.model_dump())
         return {"ok": True, "synced": False, "connection_mode": mode}
 
     try:
@@ -251,7 +251,7 @@ async def sync():
             )
     except httpx.HTTPError as e:
         logger.debug("subscription/sync live fetch failed: %s", e)
-        _submit("event", {"reason": "network"})
+        _sync(settings_obj.model_dump())
         return {"ok": True, "synced": False, "reason": "network"}
 
     # Same 401/402 handling as /status: if Stripe-side reconciliation proves
@@ -260,7 +260,7 @@ async def sync():
     if r.status_code in (401, 402):
         await _clear_subscription(settings_obj)
         reason = "revoked" if r.status_code == 401 else "expired"
-        _submit("event", {"reason": reason})
+        _sync(settings_obj.model_dump())
         return {
             "ok": True,
             "synced": False,
@@ -270,7 +270,7 @@ async def sync():
 
     if r.status_code != 200:
         logger.debug("subscription/sync got %s from cloud: %s", r.status_code, r.text[:200])
-        _submit("event", {"reason": "upstream", "status_code": r.status_code})
+        _sync(settings_obj.model_dump())
         return {"ok": True, "synced": False, "reason": "upstream"}
 
     data = r.json()
@@ -288,11 +288,7 @@ async def sync():
         )
     await save_settings_async(settings_obj)
     _sync_subscription_identity(settings_obj)
-    _submit("event", {
-        "reason": "ok",
-        "synced": bool(data.get("synced")),
-        "plan": cloud_plan,
-    })
+    _sync(settings_obj.model_dump())
     return {
         "ok": True,
         "synced": bool(data.get("synced")),

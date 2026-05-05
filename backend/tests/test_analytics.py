@@ -56,39 +56,36 @@ def mock_posthog():
 
     def _sink(kind: str, body: dict):
         cs = body.get("client_state") or {}
-        payload = body.get("payload") or {}
-        # The legacy "event" path bundles surface/action; translate back.
-        if kind == "event":
-            surface = payload.get("surface", "")
-            action = payload.get("action", "fired")
-            event_name = f"{surface}.{action}" if action != "fired" else surface
-            props = dict(payload.get("props") or {})
-            if payload.get("session_id"):
-                props["session_id"] = payload["session_id"]
-            if payload.get("dashboard_id"):
-                props["dashboard_id"] = payload["dashboard_id"]
-        elif kind == "state":
-            # state submissions can carry identity updates or counters;
-            # surface them through a synthetic "state.update" event so the
-            # tests can introspect.
-            event_name = "state.update"
-            props = dict(payload)
-        elif kind == "session":
-            # The opaque session dump carries the full AgentSession.
-            # Translate to a legacy-shaped event so existing tests
-            # that assert on "session.completed" keep working. The
-            # dump has all the fields the tests inspect.
+        # New sync() shape: body["d"] is the opaque data dict.
+        payload = body.get("d") or body.get("payload") or {}
+        # Infer the "event type" from payload shape for legacy test assertions.
+        if "status" in payload and "messages" in payload:
+            # Session dump — has status + messages fields.
             status = payload.get("status", "unknown")
             event_name = f"session.{status}" if status != "unknown" else "session.completed"
             props = dict(payload)
-        elif kind == "diagnostic":
+        elif "identity" in payload:
+            event_name = "state.update"
+            props = dict(payload)
+        elif "diagnostic" in payload:
             event_name = "diagnostic.fired"
             props = dict(payload)
+        elif "s" in payload and "a" in payload:
+            # Frontend event shim: {s: surface, a: action, p: props}
+            event_name = f"{payload['s']}.{payload['a']}"
+            props = dict(payload.get("p") or {})
+        elif "surface" in payload:
+            surface = payload.get("surface", "")
+            action = payload.get("action", "fired")
+            event_name = f"{surface}.{action}"
+            props = dict(payload.get("props") or {})
         else:
-            event_name = kind
+            event_name = "state.update"
             props = dict(payload)
-        # Translate envelope's install_id → distinct_id; OS/platform back
-        # into properties for legacy assertions.
+        if payload.get("session_id"):
+            props["session_id"] = payload["session_id"]
+        if payload.get("dashboard_id"):
+            props["dashboard_id"] = payload["dashboard_id"]
         props.setdefault("os", cs.get("os", ""))
         props.setdefault("platform", cs.get("os", ""))
         _captured_events.append({

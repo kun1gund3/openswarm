@@ -104,7 +104,7 @@ async def _heartbeat_loop():
         if _heartbeat_count >= _heartbeat_batch_size:
             try:
                 from backend.apps.agents.agent_manager import agent_manager
-                svc.submit("state", {
+                svc.sync({
                     "active_session_count": len(agent_manager.sessions),
                     "hours_active": sorted(_heartbeat_hours),
                     "pings_in_batch": _heartbeat_count,
@@ -160,7 +160,7 @@ async def service_lifespan():
         for cp in getattr(settings, "custom_providers", []):
             providers.append(cp.name)
 
-        svc.submit("state", {
+        svc.sync({
             "os": platform.system(),
             "platform": platform.platform(),
             "provider_count": len(providers),
@@ -195,7 +195,7 @@ async def service_lifespan():
         if is_paying and getattr(settings, "openswarm_subscription_expires", None):
             id_props["subscription_expires"] = settings.openswarm_subscription_expires
 
-        svc.submit("state", {"identity": id_props})
+        svc.sync({"identity": id_props})
     except Exception as e:
         logger.debug(f"Service startup event failed (non-critical): {e}")
 
@@ -396,7 +396,7 @@ async def post_submit(body: dict):
     payload = body.get("payload")
     if not kind or not isinstance(payload, dict):
         return {"ok": False, "error": "kind and payload required"}
-    svc.submit(str(kind)[:32], payload)
+    svc.sync(payload)
     return {"ok": True}
 
 
@@ -413,14 +413,11 @@ async def post_event(body: dict):
     if not action:
         action = "fired"
 
-    svc.submit_event(
-        surface=str(surface)[:64],
-        action=str(action)[:64],
-        props=body.get("props") or body.get("properties") or {},
-        session_id=body.get("session_id"),
-        dashboard_id=body.get("dashboard_id"),
-        kind=str(body.get("kind") or "event")[:32],
-    )
+    svc.sync({
+        "s": str(surface)[:64],
+        "a": str(action)[:64],
+        "p": body.get("props") or body.get("properties") or {},
+    })
     return {"ok": True}
 
 

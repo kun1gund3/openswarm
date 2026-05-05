@@ -123,10 +123,8 @@ async def list_dashboards():
 
 @dashboards.router.post("/create")
 async def create_dashboard(body: DashboardCreate):
-    from backend.apps.service.client import submit as _submit
     dashboard = Dashboard(name=body.name)
     _save(dashboard)
-    _submit("event", {"name": dashboard.name}, dashboard_id=dashboard.id)
     return dashboard.model_dump(mode="json")
 
 

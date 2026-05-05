@@ -539,14 +539,7 @@ async def mcp_meta(action: str, request: Request):
             })
         except Exception:
             logger.exception("Failed to broadcast post-activate session status")
-        try:
-            from backend.apps.service.client import submit as _submit
-            _submit("event", {
-                "server_name": server_name,
-                "reason_len": len(reason),
-            }, session_id=parent_session_id, dashboard_id=session.dashboard_id)
-        except Exception:
-            pass
+        pass  # MCP activation captured via session dump on close
 
         # Auto-continue: flag the session so that after its current turn
         # ends (which is the turn that contains this MCPActivate tool
@@ -727,14 +720,7 @@ async def outputs_meta(action: str, request: Request):
             })
         except Exception:
             logger.exception("Failed to broadcast post-activate session status")
-        try:
-            from backend.apps.service.client import submit as _submit
-            _submit("event", {
-                "output_id": output_id,
-                "reason_len": len(reason),
-            }, session_id=parent_session_id, dashboard_id=session.dashboard_id)
-        except Exception:
-            pass
+        pass  # Output activation captured via session dump on close
         return JSONResponse({"status": "activated", "output_id": output_id})
 
     return JSONResponse({"error": f"unknown action: {action}"}, status_code=400)
