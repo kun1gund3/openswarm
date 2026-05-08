@@ -31,6 +31,7 @@ async def settings_lifespan():
             sync_openai_api_key,
             sync_openrouter_api_key,
             sync_openswarm_pro_as_claude,
+            sync_custom_providers,
         )
         s = load_settings()
         import asyncio as _asyncio
@@ -45,6 +46,7 @@ async def settings_lifespan():
                 getattr(s, "openai_api_key", None),
                 getattr(s, "openrouter_api_key", None),
                 getattr(s, "connection_mode", None) == "openswarm-pro",
+                bool(getattr(s, "custom_providers", None) or []),
             ])
             if needs_router:
                 try:
@@ -62,6 +64,7 @@ async def settings_lifespan():
                 proxy = getattr(s, "openswarm_proxy_url", None) or "https://api.openswarm.com"
                 if bearer:
                     await sync_openswarm_pro_as_claude(bearer, proxy)
+            await sync_custom_providers(getattr(s, "custom_providers", None) or [])
 
         _asyncio.create_task(_boot_router_then_sync())
     except Exception as e:
@@ -203,10 +206,18 @@ async def update_settings(body: AppSettings):
     openrouter_changed = (
         getattr(body, "openrouter_api_key", None) != getattr(old, "openrouter_api_key", None)
     )
+    custom_providers_changed = (
+        [cp.model_dump() for cp in (getattr(body, "custom_providers", None) or [])]
+        != [cp.model_dump() for cp in (getattr(old, "custom_providers", None) or [])]
+    )
     any_keyed_added = (
         (getattr(body, "google_api_key", None) and not getattr(old, "google_api_key", None))
         or (getattr(body, "openai_api_key", None) and not getattr(old, "openai_api_key", None))
         or (getattr(body, "openrouter_api_key", None) and not getattr(old, "openrouter_api_key", None))
+        or (
+            bool(getattr(body, "custom_providers", None) or [])
+            and not bool(getattr(old, "custom_providers", None) or [])
+        )
     )
 
     if openrouter_changed:
@@ -218,14 +229,16 @@ async def update_settings(body: AppSettings):
 
     # Boot+sync runs off the request path — ensure_running() can take 5min
     # on first install (npm pull) and would freeze the event loop.
-    if google_changed or openai_changed or openrouter_changed:
+    if google_changed or openai_changed or openrouter_changed or custom_providers_changed:
         async def _boot_and_sync_keys(
             google_key: str | None,
             openai_key: str | None,
             openrouter_key: str | None,
+            custom_providers: list,
             do_google: bool,
             do_openai: bool,
             do_openrouter: bool,
+            do_custom: bool,
             need_boot: bool,
         ):
             try:
@@ -235,6 +248,7 @@ async def update_settings(body: AppSettings):
                     sync_gemini_api_key,
                     sync_openai_api_key,
                     sync_openrouter_api_key,
+                    sync_custom_providers,
                 )
                 if need_boot and not _9r_running():
                     await _9r_ensure()
@@ -244,6 +258,8 @@ async def update_settings(body: AppSettings):
                     await sync_openai_api_key(openai_key or None)
                 if do_openrouter:
                     await sync_openrouter_api_key(openrouter_key or None)
+                if do_custom:
+                    await sync_custom_providers(custom_providers or [])
             except Exception as e:
                 logger.warning(f"Background apikey sync failed: {e}")
 
@@ -251,9 +267,11 @@ async def update_settings(body: AppSettings):
             getattr(body, "google_api_key", None),
             getattr(body, "openai_api_key", None),
             getattr(body, "openrouter_api_key", None),
+            getattr(body, "custom_providers", None) or [],
             google_changed,
             openai_changed,
             openrouter_changed,
+            custom_providers_changed,
             any_keyed_added,
         ))
 

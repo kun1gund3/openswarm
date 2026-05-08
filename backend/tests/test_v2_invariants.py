@@ -996,6 +996,88 @@ def test_get_context_window_unknown_returns_default():
     assert cw == 128_000
 
 
+# ---------------------------------------------------------------------------
+# Custom OpenAI-compatible providers (Ollama Cloud, Together, etc.)
+# ---------------------------------------------------------------------------
+
+
+def test_custom_provider_value_synthesises_route_api_entry():
+    """`custom/<slug>/<bare>` picker values must synthesise a route='api',
+    api='custom' entry whose model_id is the 9Router routing string
+    `cp-<slug>/<bare>`. agent_manager keys on api='custom' and resolved_model
+    must be the cp- prefixed string for 9Router to forward correctly."""
+    from backend.apps.agents.providers.registry import _find_builtin_model
+    entry = _find_builtin_model("custom/ollama-cloud/gpt-oss:120b")
+    assert entry is not None
+    assert entry.get("api") == "custom"
+    assert entry.get("route") == "api"
+    assert entry.get("model_id") == "cp-ollama-cloud/gpt-oss:120b"
+    assert entry.get("router_model_id") == "cp-ollama-cloud/gpt-oss:120b"
+
+
+def test_custom_provider_value_resolve_model_id_returns_cp_prefix():
+    from backend.apps.agents.providers.registry import resolve_model_id_for_sdk
+    from backend.apps.settings.models import AppSettings
+    rid = resolve_model_id_for_sdk("custom/ollama-cloud/gpt-oss:120b", AppSettings())
+    assert rid == "cp-ollama-cloud/gpt-oss:120b"
+
+
+def test_custom_provider_value_with_multi_segment_model_id():
+    """Model ids may contain '/' (e.g. meta-llama/llama-3-70b-instruct on
+    Together AI). Synthesis must use partition on the FIRST '/' so the
+    rest of the model id stays intact."""
+    from backend.apps.agents.providers.registry import _find_builtin_model
+    entry = _find_builtin_model("custom/together-ai/meta-llama/llama-3-70b-instruct")
+    assert entry is not None
+    assert entry.get("model_id") == "cp-together-ai/meta-llama/llama-3-70b-instruct"
+
+
+def test_custom_provider_lookup_finds_entry_by_slug():
+    """_find_custom_provider_for_value must slugify the same way as the
+    UI/sync layer so name 'Ollama Cloud' resolves to the value
+    'custom/ollama-cloud/...'."""
+    from backend.apps.agents.providers.registry import _find_custom_provider_for_value
+    from backend.apps.settings.models import AppSettings, CustomProvider
+    s = AppSettings(custom_providers=[
+        CustomProvider(name="Ollama Cloud", base_url="https://ollama.com/v1", api_key="x"),
+        CustomProvider(name="Together AI", base_url="https://api.together.xyz/v1", api_key="y"),
+    ])
+    cp = _find_custom_provider_for_value(s, "custom/ollama-cloud/gpt-oss:120b")
+    assert cp is not None and cp.name == "Ollama Cloud"
+    cp2 = _find_custom_provider_for_value(s, "custom/together-ai/meta-llama/llama-3-70b")
+    assert cp2 is not None and cp2.name == "Together AI"
+    # Unknown slug → None.
+    assert _find_custom_provider_for_value(s, "custom/nonexistent/whatever") is None
+
+
+def test_get_context_window_custom_provider_value_format():
+    """Picker values use `custom/<slug>/<bare>` but the user-stored model
+    list keys context_window by the bare model id. Lookup must strip the
+    prefix before matching."""
+    from backend.apps.agents.providers.registry import get_context_window
+    from backend.apps.settings.models import AppSettings, CustomProvider
+    s = AppSettings(custom_providers=[
+        CustomProvider(
+            name="Together AI",
+            base_url="https://api.together.xyz/v1",
+            api_key="x",
+            models=[{"value": "deepseek-r1", "label": "DeepSeek R1", "context_window": 64_000}],
+        ),
+    ])
+    assert get_context_window("Together AI", "custom/together-ai/deepseek-r1", s) == 64_000
+
+
+def test_custom_provider_slug_is_url_safe():
+    """The slug must be alnum-and-dash only — it's used both as the 9Router
+    prefix and as a URL path segment. Spaces, slashes, and special chars
+    must all be folded to dashes."""
+    from backend.apps.agents.providers.registry import _custom_provider_slug_for_lookup
+    assert _custom_provider_slug_for_lookup("Ollama Cloud") == "ollama-cloud"
+    assert _custom_provider_slug_for_lookup("My/Local LM!!!") == "my-local-lm"
+    assert _custom_provider_slug_for_lookup("") == "custom"
+    assert _custom_provider_slug_for_lookup("   ") == "custom"
+
+
 # ===========================================================================
 # Group S — calculate_cost regression tests
 # ===========================================================================

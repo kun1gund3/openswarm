@@ -579,7 +579,8 @@ const Tools: React.FC = () => {
           if (discoverTools.fulfilled.match(discoverResult)) {
             setSnackbar({ open: true, message: `${integration.name} ready — actions discovered` });
           } else {
-            setSnackbar({ open: true, message: `${integration.name} enabled but discovery failed`, severity: 'error' });
+            const detail = (discoverResult as any).error?.message || 'discovery failed';
+            setSnackbar({ open: true, message: `${integration.name}: ${detail}`, severity: 'error' });
           }
         }
       } else {
@@ -602,7 +603,9 @@ const Tools: React.FC = () => {
             if (discoverTools.fulfilled.match(discoverResult)) {
               setSnackbar({ open: true, message: `${integration.name} ready — actions discovered` });
             } else {
-              setSnackbar({ open: true, message: `${integration.name} enabled but discovery failed — is ${integration.mcp_config.command || 'the server'} installed?`, severity: 'error' });
+              const detail = (discoverResult as any).error?.message
+                || `discovery failed — is ${integration.mcp_config.command || 'the server'} installed?`;
+              setSnackbar({ open: true, message: `${integration.name}: ${detail}`, severity: 'error' });
             }
           }
         }
@@ -880,7 +883,9 @@ const Tools: React.FC = () => {
         if (discoverTools.fulfilled.match(discoverResult)) {
           setSnackbar({ open: true, message: `${f.name} ready — actions discovered` });
         } else {
-          setSnackbar({ open: true, message: `${f.name} installed but discovery failed — the MCP server may need setup first`, severity: 'error' });
+          const detail = (discoverResult as any).error?.message
+            || 'discovery failed — the MCP server may need setup first';
+          setSnackbar({ open: true, message: `${f.name}: ${detail}`, severity: 'error' });
         }
       }
     } else {

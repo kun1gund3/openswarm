@@ -647,24 +647,51 @@ async def _discover_mcp_tools_stdio(command: str, args: list[str] | None = None,
         limit=10 * 1024 * 1024,  # 10 MB buffer for large tool lists
     )
 
+    # Drain stderr in the background. Two reasons: (1) the OS pipe buffer is
+    # ~64 KB; if npx prints more than that during a cold-cache install
+    # (which happens when AV scanning slows npm), the child blocks on
+    # write and we'd see what looks like a hang. (2) the rolling tail lets
+    # us include npx's own diagnostic in any error we surface, instead of
+    # the opaque "discovery failed" we used to show.
+    stderr_tail: list[str] = []
+
+    async def _drain_stderr() -> None:
+        try:
+            while True:
+                chunk = await proc.stderr.readline()
+                if not chunk:
+                    return
+                stderr_tail.append(chunk.decode(errors="replace"))
+                if len(stderr_tail) > 50:
+                    del stderr_tail[: len(stderr_tail) - 50]
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            return
+
+    stderr_task = asyncio.create_task(_drain_stderr())
+
     async def _send(msg: dict) -> None:
         line = json.dumps(msg) + "\n"
         proc.stdin.write(line.encode())
         await proc.stdin.drain()
 
-    async def _recv() -> dict:
+    async def _recv(timeout_s: float = 30.0) -> dict:
         """Read JSON-RPC responses, skipping notification lines (no 'id' field)."""
         while True:
-            line = await asyncio.wait_for(proc.stdout.readline(), timeout=30.0)
+            line = await asyncio.wait_for(proc.stdout.readline(), timeout=timeout_s)
             if not line:
-                stderr_out = ""
+                # stdout EOF = child exited. Wait briefly for the stderr
+                # drain to catch up so we capture the real failure reason
+                # (which often arrives a few ms after stdout closes).
                 try:
-                    stderr_out = (await asyncio.wait_for(proc.stderr.read(4096), timeout=2.0)).decode(errors="replace")
-                except (asyncio.TimeoutError, Exception):
+                    await asyncio.wait_for(asyncio.shield(stderr_task), timeout=1.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
                     pass
+                tail = "".join(stderr_tail[-10:]).strip()
                 raise HTTPException(
                     status_code=502,
-                    detail=f"MCP stdio process exited unexpectedly{': ' + stderr_out if stderr_out else ''}",
+                    detail=f"MCP stdio process exited unexpectedly{': ' + tail if tail else ''}",
                 )
             stripped = line.decode(errors="replace").strip()
             if not stripped:
@@ -685,7 +712,12 @@ async def _discover_mcp_tools_stdio(command: str, args: list[str] | None = None,
                 "clientInfo": {"name": "self-swarm", "version": "0.1.0"},
             },
         })
-        await _recv()
+        # First response is the slow one. On Windows with a cold npx cache,
+        # `npx -y <pkg>` has to download the package + transitive deps and
+        # AV-scan every file npm writes; total install time often exceeds
+        # 60 s and occasionally pushes past 90 s. Subsequent reads run
+        # against an already-running server and stay at the default 30 s.
+        await _recv(timeout_s=120.0)
 
         await _send({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
@@ -696,12 +728,30 @@ async def _discover_mcp_tools_stdio(command: str, args: list[str] | None = None,
         return [{"name": t.get("name", ""), "description": t.get("description", ""), "inputSchema": t.get("inputSchema")} for t in tools_list]
 
     except HTTPException as e:
+        # Heal-on-corrupt-npx-cache still triggers from the EOF branch,
+        # which now includes the full stderr tail in `e.detail` — so the
+        # ERR_MODULE_NOT_FOUND signature is still discoverable here.
         if _attempt == 0 and _try_heal_npx_cache(str(e.detail) if e.detail is not None else ""):
             return await _discover_mcp_tools_stdio(command, args, env, _attempt=1)
         raise
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="MCP stdio server timed out during discovery")
+        # Most common cause: cold npx cache on Windows. The npm install
+        # persists across attempts, so a retry usually finishes against a
+        # warm cache. Surface npx's own progress line if we have one — it
+        # makes the cause obvious ("downloading X...") instead of opaque.
+        tail_text = "".join(stderr_tail[-5:]).strip()
+        detail = "MCP discovery timed out — the server may still be downloading on first run"
+        if tail_text:
+            preview = tail_text[-200:].replace("\n", " ").strip()
+            detail += f" (last output: {preview})"
+        detail += ". Try again in a moment."
+        raise HTTPException(status_code=504, detail=detail)
     finally:
+        stderr_task.cancel()
+        try:
+            await stderr_task
+        except (asyncio.CancelledError, Exception):
+            pass
         try:
             proc.stdin.close()
         except Exception:

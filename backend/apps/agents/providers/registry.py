@@ -319,13 +319,39 @@ def _is_9router_available() -> bool:
 # Model resolution (used by the live claude_agent_sdk path)
 # ---------------------------------------------------------------------------
 
+_CUSTOM_VALUE_PREFIX = "custom/"
+
+
+def _custom_provider_slug_for_lookup(name: str) -> str:
+    """Mirror nine_router._custom_provider_slug — duplicated here to avoid
+    importing from nine_router (circular: nine_router imports from settings)."""
+    import re
+    s = re.sub(r"[^a-zA-Z0-9-]+", "-", (name or "").strip().lower()).strip("-")
+    return s or "custom"
+
+
+def _find_custom_provider_for_value(settings, value: str):
+    """Look up the CustomProvider whose slug matches the slug encoded in a
+    `custom/<slug>/<model_id>` picker value. Returns None if no match."""
+    if not isinstance(value, str) or not value.startswith(_CUSTOM_VALUE_PREFIX):
+        return None
+    rest = value[len(_CUSTOM_VALUE_PREFIX):]
+    slug, _sep, _bare = rest.partition("/")
+    if not slug:
+        return None
+    for cp in getattr(settings, "custom_providers", None) or []:
+        if _custom_provider_slug_for_lookup(getattr(cp, "name", "")) == slug:
+            return cp
+    return None
+
+
 def _find_builtin_model(short_name: str) -> dict | None:
     """Look up a model entry by its short `value`.
 
-    OpenRouter entries (prefixed `or:<vendor>/<model>`) aren't in
-    BUILTIN_MODELS — they're synthesised at request time from the live
-    OR entries are synthesised on demand so the rest of the routing
-    code can treat them like BUILTIN_MODELS entries."""
+    OpenRouter entries (prefixed `or:<vendor>/<model>`) and custom-provider
+    entries (prefixed `custom/<slug>/<model_id>`) aren't in BUILTIN_MODELS —
+    they're synthesised on demand so the rest of the routing code can treat
+    them like BUILTIN_MODELS entries."""
     for models in BUILTIN_MODELS.values():
         for m in models:
             if m.get("value") == short_name:
@@ -341,6 +367,23 @@ def _find_builtin_model(short_name: str) -> dict | None:
                 "router_model_id": f"openrouter/{bare}",
                 "api": "openrouter",
                 "route": "openrouter",
+                "reasoning": False,
+            }
+    if isinstance(short_name, str) and short_name.startswith(_CUSTOM_VALUE_PREFIX):
+        rest = short_name[len(_CUSTOM_VALUE_PREFIX):]
+        slug, _sep, bare_model = rest.partition("/")
+        if slug and bare_model:
+            # Routing string `cp-<slug>/<model>` matches the prefix we use
+            # when sync_custom_providers registers the provider node.
+            routed = f"cp-{slug}/{bare_model}"
+            return {
+                "value": short_name,
+                "label": bare_model,
+                "context_window": 128_000,
+                "model_id": routed,
+                "router_model_id": routed,
+                "api": "custom",
+                "route": "api",
                 "reasoning": False,
             }
     return None
@@ -484,12 +527,20 @@ def get_context_window(provider: str, model: str, settings: AppSettings | None =
             if m["value"] == model:
                 return m.get("context_window", 128_000)
 
-    # Check custom providers
+    # Check custom providers — picker values are `custom/<slug>/<bare_model>`;
+    # cp.models[].value stores the bare model id the user typed. Match the
+    # bare-model tail against any custom provider's models list.
     if settings:
+        bare_model = model
+        if isinstance(model, str) and model.startswith(_CUSTOM_VALUE_PREFIX):
+            rest = model[len(_CUSTOM_VALUE_PREFIX):]
+            _slug, _sep, bare_model = rest.partition("/")
         for cp in getattr(settings, "custom_providers", []):
-            for m in cp.models:
-                if m.get("value") == model or m.get("id") == model:
-                    return m.get("context_window", 128_000)
+            for m in (getattr(cp, "models", None) or []):
+                if m.get("value") == bare_model or m.get("id") == bare_model:
+                    cw = m.get("context_window")
+                    if isinstance(cw, int) and cw > 0:
+                        return cw
 
     return 128_000  # safe default
 

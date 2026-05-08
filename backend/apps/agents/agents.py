@@ -601,6 +601,41 @@ async def list_models():
                 entries = sorted(by_vendor[vendor], key=lambda x: x["label"].lower())
                 result[f"OpenRouter · {pretty}"] = entries
 
+    # User-configured custom OpenAI-compatible providers (Ollama Cloud, Together, etc).
+    # Each provider becomes its own group in the picker; each model is addressed via
+    # the `custom/<slug>/<model_id>` value, which `_find_builtin_model` synthesises
+    # into a route='api' / api='custom' entry at request time.
+    from backend.apps.agents.providers.registry import _custom_provider_slug_for_lookup
+    for cp in (getattr(settings, "custom_providers", None) or []):
+        cp_name = (getattr(cp, "name", "") or "").strip()
+        cp_base_url = (getattr(cp, "base_url", "") or "").strip()
+        cp_models = getattr(cp, "models", None) or []
+        if not cp_name or not cp_base_url or not cp_models:
+            continue
+        slug = _custom_provider_slug_for_lookup(cp_name)
+        entries: list[dict] = []
+        for m in cp_models:
+            bare = (m.get("value") or m.get("id") or "").strip()
+            if not bare:
+                continue
+            label = (m.get("label") or bare).strip() or bare
+            ctx = m.get("context_window")
+            if not isinstance(ctx, int) or ctx <= 0:
+                ctx = 128_000
+            entries.append({
+                "value": f"custom/{slug}/{bare}",
+                "label": label,
+                "context_window": ctx,
+                "reasoning": bool(m.get("reasoning", False)),
+                "input_cost_per_1m": 0.0,
+                "output_cost_per_1m": 0.0,
+                "is_free": False,
+                "billing_kind": "api_key",
+                "tiers": [3, 3, 1],
+            })
+        if entries:
+            result[cp_name] = entries
+
     return {"models": result, "notes": notes}
 
 

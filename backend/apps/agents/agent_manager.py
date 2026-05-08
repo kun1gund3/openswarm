@@ -1672,9 +1672,21 @@ class AgentManager:
                 and not _router_model_id.startswith(("cc/", "cx/", "gc/", "ag/", "gemini/"))
                 and _api_type_for_session == "anthropic"
             )
+            # Custom-provider sessions (Ollama Cloud, Together, Groq, etc.)
+            # set ANTHROPIC_BASE_URL to 9Router but 9Router has no Claude
+            # connection unless the user separately set up one. The CLI's
+            # built-in WebSearch delegates to Anthropic Haiku, which falls
+            # through 9Router to whichever connection serves anthropic/...
+            # ids — usually OpenRouter — and 401s. Force the openswarm-web
+            # MCP to register so WebSearch always cascades through our own
+            # /api/web/search (Gemini → OpenAI → DuckDuckGo).
+            _is_custom_session = _api_type_for_session == "custom"
             _has_anthropic_path = (
-                bool(getattr(global_settings, "anthropic_api_key", None))  # direct env bypass
-                or (_9r_has_anthropic and _primary_is_claude)
+                not _is_custom_session
+                and (
+                    bool(getattr(global_settings, "anthropic_api_key", None))
+                    or (_9r_has_anthropic and _primary_is_claude)
+                )
             )
 
             _need_web_mcp = not _has_anthropic_path
@@ -1855,6 +1867,45 @@ class AgentManager:
                     "ANTHROPIC_BASE_URL": "http://localhost:20128",
                 }
                 logger.info(f"[MCP-DEBUG] Using direct OpenAI API key (route=api) for {session.model}")
+            elif _is_pinned_api_route and _api_route_provider == "custom":
+                # User-configured OpenAI-compatible endpoint (Ollama Cloud,
+                # Together, local Ollama, etc.). Routes through 9Router's
+                # openai-compatible provider node we synced from settings.
+                from backend.apps.nine_router import ensure_running as _9r_ensure_c
+                if not _9r_running():
+                    logger.info(f"[MCP-DEBUG] custom provider selected but 9Router not running; waiting for startup")
+                    await _9r_ensure_c()
+                    if not _9r_running():
+                        raise ValueError(
+                            "9Router could not start. Custom OpenAI-compatible "
+                            "providers need 9Router to translate the Anthropic "
+                            "protocol — install Node.js and restart the app."
+                        )
+                from backend.apps.agents.providers.registry import _find_custom_provider_for_value
+                cp = _find_custom_provider_for_value(global_settings, session.model)
+                env = {
+                    "ANTHROPIC_API_KEY": "9router",
+                    "ANTHROPIC_BASE_URL": "http://localhost:20128",
+                    "ENABLE_TOOL_SEARCH": "auto",
+                }
+                if cp:
+                    env["OPENAI_API_KEY"] = (cp.api_key or "")
+                    env["OPENAI_BASE_URL"] = (cp.base_url or "")
+                # Pin subagent ids — without these, CLI's default Haiku 4.5
+                # gets sent to the custom provider and 404s.
+                if global_settings.anthropic_api_key:
+                    env["CLAUDE_CODE_SUBAGENT_MODEL"] = "claude-sonnet-4-6"
+                    env["ANTHROPIC_SMALL_FAST_MODEL"] = "claude-haiku-4-5-20251001"
+                    env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "claude-haiku-4-5-20251001"
+                else:
+                    # Pin to the same custom-provider model so subagents stay
+                    # within the user's configured endpoint instead of hitting
+                    # an unconfigured Anthropic lane.
+                    env["CLAUDE_CODE_SUBAGENT_MODEL"] = resolved_model
+                    env["ANTHROPIC_SMALL_FAST_MODEL"] = resolved_model
+                    env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = resolved_model
+                options_kwargs["env"] = env
+                logger.info(f"[MCP-DEBUG] Using custom provider for {session.model} → {resolved_model}")
             elif _is_pinned_api_route and _api_route_provider == "gemini" and getattr(global_settings, "google_api_key", None):
                 # Routed through the local anthropic-proxy so it can scrub the
                 # JSON-Schema fields Gemini's API rejects ($schema, additionalProperties,
@@ -2969,6 +3020,15 @@ class AgentManager:
                                 if resolved_model.startswith(("cc/", "cx/", "gc/", "ag/")):
                                     _free_route = True
                                 elif resolved_model.startswith("openrouter/") and ":free" in resolved_model:
+                                    _free_route = True
+                                elif resolved_model.startswith("cp-"):
+                                    # User-configured custom OpenAI-compatible
+                                    # provider (Ollama Cloud, Together, Groq,
+                                    # local LMs, etc.). Pricing is unknowable
+                                    # without per-provider rate tables that
+                                    # would rot fast — zero out instead of
+                                    # showing the SDK's Anthropic-rate
+                                    # estimate, which is meaningless here.
                                     _free_route = True
                             if (
                                 api_type == "anthropic"
