@@ -5,10 +5,19 @@ from backend.apps.agents.models import AgentConfig, ApprovalResponse
 from contextlib import asynccontextmanager
 from fastapi import WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import JSONResponse
+import asyncio
 import json
 import logging
 
 logger = logging.getLogger(__name__)
+
+# In-flight dedup map for generate-group-meta. Keyed by (session_id, group_id).
+# When the frontend issues N concurrent requests for the same group (which it
+# can during heavy streaming), we only fire ONE upstream Anthropic call and
+# return the same Future to all callers. Eliminates the 429 thundering herd
+# without changing retry/fallback semantics — each unique (session, group)
+# still gets its full retry budget, just not multiplied by N callers.
+_group_meta_inflight: dict[tuple[str, str], asyncio.Future] = {}
 
 @asynccontextmanager
 async def agents_lifespan():
@@ -136,14 +145,46 @@ async def generate_group_meta(session_id: str, body: dict):
     tool_calls = body.get("tool_calls", [])
     if not group_id or not tool_calls:
         raise HTTPException(status_code=400, detail="group_id and tool_calls are required")
-    result = await agent_manager.generate_group_meta(
-        session_id,
-        group_id,
-        tool_calls,
-        results_summary=body.get("results_summary"),
-        is_refinement=body.get("is_refinement", False),
-    )
-    return result
+
+    # In-flight dedup. If an identical request is already running, await its
+    # result instead of firing another Anthropic call. This is the entire fix
+    # for the 429 storm we were seeing — N concurrent identical requests
+    # collapse to 1 upstream call. Refinement requests bypass dedup since
+    # they may legitimately want fresh results with different inputs.
+    is_refinement = body.get("is_refinement", False)
+    key = (session_id, group_id)
+    if not is_refinement:
+        existing = _group_meta_inflight.get(key)
+        if existing is not None and not existing.done():
+            try:
+                return await existing
+            except Exception:
+                # If the in-flight call failed, fall through and try again
+                # ourselves rather than propagating someone else's error.
+                pass
+
+    future: asyncio.Future = asyncio.get_event_loop().create_future()
+    if not is_refinement:
+        _group_meta_inflight[key] = future
+    try:
+        result = await agent_manager.generate_group_meta(
+            session_id,
+            group_id,
+            tool_calls,
+            results_summary=body.get("results_summary"),
+            is_refinement=is_refinement,
+        )
+        if not future.done():
+            future.set_result(result)
+        return result
+    except Exception as e:
+        if not future.done():
+            future.set_exception(e)
+        raise
+    finally:
+        # Always clear our slot if we own it, so the next request runs fresh.
+        if not is_refinement and _group_meta_inflight.get(key) is future:
+            _group_meta_inflight.pop(key, None)
 
 @agents.router.patch("/sessions/{session_id}")
 async def update_session(session_id: str, body: dict):

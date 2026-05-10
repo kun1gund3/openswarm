@@ -13,19 +13,19 @@ export const step07: OnboardingStep = {
   skipIf: hasAnySkillInstalled,
   ops: [
     { kind: 'move_to', target: S.sidebarSkills },
-    { kind: 'popup', text: 'Click here!' },
+    { kind: 'popup', text: 'Wander into Skills.' },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.sidebarSkills },
     },
     { kind: 'move_to', target: S.skillItemPdf },
-    { kind: 'popup', text: 'Click here!' },
+    { kind: 'popup', text: 'Pick the PDF one.' },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.skillItemPdf },
     },
     { kind: 'move_to', target: S.skillInstallButton },
-    { kind: 'popup', text: 'Click here!' },
+    { kind: 'popup', text: 'Install it!' },
     {
       kind: 'wait_user',
       condition: { kind: 'event_bus', event: 'skill:installed' },
@@ -33,13 +33,13 @@ export const step07: OnboardingStep = {
     },
     {
       kind: 'popup',
-      text: 'Now any agent will be much better at working with PDFs.',
+      text: 'Boom! Now any chat is way better with PDFs.',
     },
     { kind: 'move_to', target: S.skillBuilderFab },
     { kind: 'click', target: S.skillBuilderFab, simulate: true },
     {
       kind: 'popup',
-      text: 'You can also prompt new skills into existence with the skill builder here.',
+      text: 'Got an idea? Type it here and the skill builder whips one up.',
     },
     { kind: 'delay', ms: 3500 },
     { kind: 'outro' },

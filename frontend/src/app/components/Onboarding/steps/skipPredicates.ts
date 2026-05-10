@@ -26,19 +26,18 @@ export function hasAnyToolEnabled(s: RootState): boolean {
   return Object.values(items).some((t: any) => t?.enabled !== false);
 }
 
-// True when a Reddit-shaped tool is currently enabled. Used by step 2's
-// wait-for-toggle so the wait only resolves when Reddit is actually ON,
-// regardless of how many times the user toggles. Catches the case where
-// the user's first click turns OFF an already-enabled Reddit, then
-// toggles back on — naive click_target waits would advance on the
-// off-click and leave AC out of sync.
-export function isRedditEnabled(s: RootState): boolean {
+// True when a YouTube-shaped tool is currently enabled. Used by step 2's
+// wait-for-toggle so the wait only resolves when YouTube is actually ON,
+// regardless of how many times the user toggles. Step 2 uses YouTube to
+// match the rest of the tour (step 3 prompts for a YouTube video summary,
+// so enabling YouTube here is a coherent throughline).
+export function isYoutubeEnabled(s: RootState): boolean {
   const items = s.tools?.items ?? {};
   return Object.values(items).some((t: any) => {
     const name = (t?.name ?? '').toLowerCase();
     const command = (t?.command ?? '').toLowerCase();
-    const isReddit = name === 'reddit' || command.includes('reddit');
-    return isReddit && t?.enabled !== false;
+    const isYoutube = name === 'youtube' || command.includes('youtube');
+    return isYoutube && t?.enabled !== false;
   });
 }
 

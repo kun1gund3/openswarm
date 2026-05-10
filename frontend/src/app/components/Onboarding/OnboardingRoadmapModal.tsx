@@ -3,6 +3,7 @@
 
 import React from 'react';
 import { Modal, Box, Typography, IconButton, Button } from '@mui/material';
+import { motion, AnimatePresence } from 'framer-motion';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import LockIcon from '@mui/icons-material/Lock';
@@ -36,29 +37,59 @@ const OnboardingRoadmapModal: React.FC = () => {
     progress.setPanelMode('expanded');
   };
 
+  // Anchor the roadmap to the same top-right corner the panel sits in,
+  // so visually it reads as the panel "expanding into" the full roadmap
+  // rather than a centered modal that breaks spatial continuity. The
+  // origin point matches OnboardingPanel's top:44 / right:16 dock.
   return (
     <Modal
       open={open}
       onClose={close}
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+      // Disable Modal's internal flex centering — we position the inner
+      // box absolutely from the top-right corner ourselves.
+      sx={{ inset: 0 }}
+      slotProps={{
+        backdrop: {
+          sx: { backgroundColor: 'rgba(0,0,0,0.42)' },
+        },
       }}
-      slotProps={{ backdrop: { sx: { backgroundColor: 'rgba(0,0,0,0.45)' } } }}
+      // Modal mounts as soon as `open` is true; AnimatePresence inside
+      // owns the actual exit animation, so we keep keepMounted off and
+      // use AnimatePresence with mode="wait".
     >
+      {/* Outer Box gets focus / aria attributes from MUI Modal. The
+          motion.div inside handles the slide-in. */}
       <Box
         sx={{
-          width: '100%',
-          maxWidth: 460,
-          mx: 2,
+          position: 'absolute',
+          top: 44,
+          right: 16,
+          outline: 'none',
+        }}
+      >
+      <AnimatePresence>
+        {open && (
+        <motion.div
+          key="onboarding-roadmap"
+          initial={{ opacity: 0, y: -10, scale: 0.94, transformOrigin: 'top right' }}
+          animate={{ opacity: 1, y: 0, scale: 1, transformOrigin: 'top right' }}
+          exit={{ opacity: 0, y: -8, scale: 0.96, transformOrigin: 'top right' }}
+          transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
+          style={{ outline: 'none' }}
+        >
+      <Box
+        sx={{
+          // Roughly the same width as the expanded panel, just a touch
+          // wider so the 8-row roadmap breathes. 360 vs panel's 320.
+          width: 360,
+          maxHeight: 'calc(100vh - 80px)',
+          overflowY: 'auto',
           bgcolor: c.bg.surface,
           color: c.text.primary,
           border: `1px solid ${c.border.medium}`,
-          borderRadius: `${c.radius.xl}px`,
-          boxShadow: '0 16px 48px rgba(0,0,0,0.30)',
+          borderRadius: `${c.radius.lg}px`,
+          boxShadow: '0 14px 40px rgba(0,0,0,0.28)',
           outline: 'none',
-          overflow: 'hidden',
           fontFamily: c.font.sans,
         }}
       >
@@ -266,6 +297,10 @@ const OnboardingRoadmapModal: React.FC = () => {
             Jump to current todo
           </Button>
         </Box>
+      </Box>
+        </motion.div>
+        )}
+      </AnimatePresence>
       </Box>
     </Modal>
   );

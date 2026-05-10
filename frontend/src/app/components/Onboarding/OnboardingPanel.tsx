@@ -238,39 +238,74 @@ const OnboardingPanel: React.FC = () => {
                   overflow: 'hidden',
                 }}
               >
-                {/* Header */}
+                {/* Header — stage label + minimize + progress bar. No
+                    bottom border anymore: the progress bar IS the
+                    visual divider between header and body, no need for
+                    a second separator line below it. */}
                 <Box
                   sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
                     px: 1.6,
                     pt: 1.2,
-                    pb: 0.75,
-                    borderBottom: `1px solid ${c.border.subtle}`,
+                    pb: 0.95,
                   }}
                 >
-                  <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.7 }}>
-                    <Typography
-                      sx={{ fontSize: 13.5, fontWeight: 600, color: c.text.primary }}
-                    >
-                      {STAGE_LABELS[stageOf]}
-                    </Typography>
-                    <Typography sx={{ fontSize: 11.5, color: c.text.muted }}>
-                      {stageDone}/{stageSteps.length}
-                    </Typography>
-                  </Box>
-                  <IconButton
-                    size="small"
-                    onClick={() => {
-                      report('panel_minimized', { from: 'expanded' });
-                      progress.setPanelMode('pill');
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
                     }}
-                    sx={{ color: c.text.tertiary, p: 0.4 }}
-                    aria-label="Minimize"
                   >
-                    <RemoveIcon sx={{ fontSize: 16 }} />
-                  </IconButton>
+                    <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.7 }}>
+                      <Typography
+                        sx={{ fontSize: 12.5, fontWeight: 600, color: c.text.primary }}
+                      >
+                        {STAGE_LABELS[stageOf]}
+                      </Typography>
+                      <Typography sx={{ fontSize: 11, color: c.text.muted }}>
+                        {stageDone}/{stageSteps.length}
+                      </Typography>
+                    </Box>
+                    <IconButton
+                      size="small"
+                      onClick={() => {
+                        report('panel_minimized', { from: 'expanded' });
+                        progress.setPanelMode('pill');
+                      }}
+                      sx={{ color: c.text.tertiary, p: 0.4 }}
+                      aria-label="Minimize"
+                    >
+                      <RemoveIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Box>
+                  <Box
+                    sx={{
+                      mt: 0.7,
+                      height: 3,
+                      width: '100%',
+                      borderRadius: 999,
+                      bgcolor: c.bg.secondary,
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <motion.div
+                      key={`stage-progress-${stageOf}`}
+                      initial={false}
+                      animate={{
+                        width: `${
+                          stageSteps.length > 0
+                            ? (stageDone / stageSteps.length) * 100
+                            : 0
+                        }%`,
+                      }}
+                      transition={{ duration: 0.6, ease: [0.2, 0.8, 0.2, 1] }}
+                      style={{
+                        height: '100%',
+                        background: c.accent.primary,
+                        borderRadius: 999,
+                      }}
+                    />
+                  </Box>
                 </Box>
 
                 {/* Body — celebration overlay or current step. AnimatePresence
@@ -452,8 +487,7 @@ const StepCardBody: React.FC<StepCardProps> = ({
         sx={{
           display: 'flex',
           alignItems: 'center',
-          gap: 1,
-          justifyContent: 'space-between',
+          gap: 1.4,
         }}
       >
         <Button
@@ -493,6 +527,9 @@ const StepCardBody: React.FC<StepCardProps> = ({
         <ButtonBase
           onClick={onOpenRoadmap}
           sx={{
+            // mlAuto: pushes the help icon (next sibling) to the far
+            // right while keeping "See all todos" tucked next to Show
+            // me. Visual rhythm: [Show me]  See all todos ............ ?
             fontSize: 12.5,
             fontWeight: 500,
             color: c.text.secondary,
@@ -505,7 +542,12 @@ const StepCardBody: React.FC<StepCardProps> = ({
           size="small"
           ref={infoBtnRef}
           onClick={onToggleInfo}
-          sx={{ color: c.text.tertiary, p: 0.4 }}
+          sx={{
+            color: c.text.tertiary,
+            p: 0.4,
+            ml: 'auto',
+            '&:hover': { color: c.text.secondary },
+          }}
           aria-label="More info"
         >
           <HelpOutlineIcon sx={{ fontSize: 16 }} />

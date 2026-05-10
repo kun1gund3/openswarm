@@ -135,4 +135,45 @@ try {
       try { ipcRenderer.sendToHost('passkey-detected', window.location.href); } catch (_) {}
     }
   });
+
+  // ---------------------------------------------------------------------------
+  // Canvas zoom passthrough (ctrl/meta + wheel)
+  //
+  // A <webview> is an out-of-process Chromium guest; wheel events that
+  // originate inside it never bubble to the embedding renderer. Without
+  // intercepting here, ctrl+wheel over a browser card just zooms the
+  // embedded page (Chromium's default) and the dashboard canvas never
+  // sees the gesture — issue #27.
+  //
+  // Capture-phase + passive:false so we run before the page's own listeners
+  // and can preventDefault to suppress the in-page page-zoom. We then
+  // forward the gesture (deltaY + guest-local cursor coords) to the host
+  // via sendToHost; BrowserCard's ipc-message handler turns it back into a
+  // synthetic WheelEvent dispatched from the webview element, which bubbles
+  // naturally to useCanvasControls' wheel listener.
+  const onWheelCapture = (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      console.warn('[openswarm:webview-preload] ctrl+wheel intercept → sendToHost', {
+        deltaY: e.deltaY,
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
+      ipcRenderer.sendToHost('canvas-wheel-zoom', {
+        deltaY: e.deltaY,
+        deltaMode: e.deltaMode,
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
+    } catch (err) {
+      console.warn('[openswarm:webview-preload] sendToHost failed', err);
+    }
+  };
+  // Listen on both window and document in capture phase so we run before any
+  // page-level handler that might swallow the event. passive:false is required
+  // to call preventDefault on a wheel event.
+  window.addEventListener('wheel', onWheelCapture, { capture: true, passive: false });
+  document.addEventListener('wheel', onWheelCapture, { capture: true, passive: false });
 } catch (_) {}

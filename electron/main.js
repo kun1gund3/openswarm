@@ -979,16 +979,18 @@ app.on('web-contents-created', (_event, contents) => {
       return { action: 'deny' };
     }
 
-    // Note on Google OAuth: we tried running the Gemini flow inside this
-    // popup BrowserWindow with a spoofed Chrome UA, fresh session partition,
-    // sandboxed webPreferences, and a preload script that patched
-    // navigator.webdriver/plugins/chrome/permissions. Google's consent page
-    // still rejected with "browser not supported". Their detection is
-    // actively adversarial and Google explicitly prohibits embedded browser
-    // OAuth. Gemini now routes through shell.openExternal instead (see
-    // _EXTERNAL_BROWSER_PROVIDERS in backend/apps/nine_router.py). Anthropic
-    // and OpenAI/Codex don't fingerprint, so they still use this popup path
-    // with the generic Chrome UA override set above.
+    // Note on which providers still use this popup path:
+    // - Anthropic/Claude: still works here with the Chrome UA override above.
+    // - Google (Gemini, Antigravity): blocks embedded browsers wholesale
+    //   ("browser not supported"), even with UA spoofing + sandboxed
+    //   partition + navigator.webdriver patches. Routes through
+    //   shell.openExternal instead.
+    // - OpenAI/Codex: now also routes through shell.openExternal — the
+    //   embedded popup renders blank for some users (newer embed
+    //   detection + regional access checks), and the system browser
+    //   surfaces the actual error.
+    // See _EXTERNAL_BROWSER_PROVIDERS in backend/apps/nine_router.py.
+    // When Anthropic adds the same checks, add "claude" there too.
 
     return {
       action: 'allow',

@@ -1086,10 +1086,19 @@ async def _start_codex_callback_listener(timeout: float = 300.0) -> asyncio.base
 # exchanges the code and serves a "Connected!" page. Detection on the
 # OpenSwarm side happens via the existing status poller on the
 # Settings page.
-# Both gemini-cli and antigravity use Google's OAuth, which blocks
-# embedded-browser sign-ins ("Your browser is not supported anymore"),
-# so we must hand off to the user's real default browser.
-_EXTERNAL_BROWSER_PROVIDERS: set[str] = {"gemini-cli", "antigravity"}
+# Providers that hand off to the user's default browser instead of using
+# our embedded Electron popup:
+# - gemini-cli, antigravity: Google blocks embedded browsers wholesale
+#   ("Your browser is not supported anymore") — no UA spoof defeats it.
+# - codex: OpenAI's auth.openai.com renders blank inside our popup on
+#   some users' machines (likely a mix of newer embed detection and
+#   regional access checks) and the system browser surfaces the real
+#   error rather than a silent blank window. Also what RFC 8252 mandates
+#   for native-app OAuth, so this is the correct long-term shape anyway.
+#   Codex's callback URL is special-cased below to stay on localhost:1455
+#   (OpenAI's hardcoded redirect URI) — the listener catches the system
+#   browser's redirect just like it caught the popup's.
+_EXTERNAL_BROWSER_PROVIDERS: set[str] = {"gemini-cli", "antigravity", "codex"}
 
 
 def _should_use_external_browser(provider: str) -> bool:

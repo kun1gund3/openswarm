@@ -1,6 +1,6 @@
 import type { OnboardingStep } from './types';
 import { S } from '../selectors';
-import { hasAnyToolEnabled, isRedditEnabled } from './skipPredicates';
+import { hasAnyToolEnabled, isYoutubeEnabled } from './skipPredicates';
 
 export const step02: OnboardingStep = {
   id: 'enable_actions',
@@ -13,48 +13,41 @@ export const step02: OnboardingStep = {
   skipIf: hasAnyToolEnabled,
   ops: [
     { kind: 'move_to', target: S.sidebarActions },
-    { kind: 'popup', text: 'Click here!' },
+    { kind: 'popup', text: 'Peek at Actions.' },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.sidebarActions },
     },
-    // Reddit toggle. Wait on REDUX STATE (Reddit enabled), not a single
-    // click. If the user's Reddit was already on and they accidentally
-    // toggle it off, then back on, we still advance correctly when it
-    // ends up enabled — instead of the wait resolving on the first
-    // click (toggle-off) and AC drifting out of sync.
-    { kind: 'move_to', target: S.actionsRedditToggle },
-    { kind: 'popup', text: 'Click here!' },
+    // YouTube toggle. Picked YouTube here (instead of Reddit) so the
+    // tour has a consistent throughline — step 3 launches an Agent that
+    // summarizes a YouTube video, so enabling the YouTube integration
+    // here directly powers the next step. Wait on REDUX STATE (YouTube
+    // enabled), not a single click — if the user toggles off then back
+    // on, AC stays in sync.
+    { kind: 'move_to', target: S.actionsYoutubeToggle },
+    { kind: 'popup', text: 'Flip YouTube on.' },
     {
       kind: 'wait_user',
       condition: {
         kind: 'redux_predicate',
-        selector: isRedditEnabled,
+        selector: isYoutubeEnabled,
         truthy: true,
       },
       timeoutMs: 90000,
     },
-    // After Reddit is enabled, expand its action group via the chevron.
-    { kind: 'move_to', target: S.actionsRedditChevron },
-    { kind: 'popup', text: 'Click here!' },
+    // Expand the YouTube row to reveal its actions list.
+    { kind: 'move_to', target: S.actionsYoutubeChevron },
+    { kind: 'popup', text: 'Tap to peek inside.' },
     {
       kind: 'wait_user',
-      condition: { kind: 'click_target', target: S.actionsRedditChevron },
+      condition: { kind: 'click_target', target: S.actionsYoutubeChevron },
     },
-    // Now drill into the Subreddits sub-group.
-    { kind: 'move_to', target: S.actionsSubredditsChevron },
-    { kind: 'popup', text: 'Click here!' },
-    {
-      kind: 'wait_user',
-      condition: { kind: 'click_target', target: S.actionsSubredditsChevron },
-    },
-    // Hover (no click) over the permission toggle to draw attention,
-    // popup explaining what it is, then just wait a beat — spec says
-    // no user input needed past this point.
+    // Hover the permission toggle for the first listed action and
+    // explain what it controls. No click required from the user.
     { kind: 'move_to', target: S.actionsPermissionToggle },
     {
       kind: 'popup',
-      text: 'You can set permissions for individual actions here.',
+      text: 'Wanna fine tune what each action can do? Right here.',
     },
     { kind: 'delay', ms: 3500 },
     { kind: 'outro' },

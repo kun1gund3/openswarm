@@ -52,14 +52,18 @@ export function getRecentActions(limit = 10): Array<{ s: string; a: string; ms_a
 function _flush(): void {
   if (_queue.length === 0) return;
   const batch = _queue.splice(0);
-  for (const d of batch) {
-    const body = JSON.stringify(d);
-    fetch(`${API_BASE}/service/submit`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    }).catch(() => {});
-  }
+  // Real batching: ship the whole queue in ONE request instead of N. The
+  // backend's /service/submit accepts either a single object or an array,
+  // and treating the queue as N separate POSTs was the largest single
+  // source of network/main-thread overhead in the app — hundreds of
+  // POSTs per second under load. One POST per second under the same load
+  // now. Cuts cost ~Nx.
+  const body = JSON.stringify(batch.length === 1 ? batch[0] : batch);
+  fetch(`${API_BASE}/service/submit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  }).catch(() => {});
 }
 
 export function sync(data: Record<string, unknown> = {}, opts: { immediate?: boolean } = {}): void {

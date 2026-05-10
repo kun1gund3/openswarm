@@ -13,13 +13,13 @@ export const step01: OnboardingStep = {
   skipIf: hasModelConnected,
   ops: [
     { kind: 'move_to', target: S.sidebarSettingsButton },
-    { kind: 'popup', text: 'Click here!' },
+    { kind: 'popup', text: 'Pop into Settings.' },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.sidebarSettingsButton },
     },
     { kind: 'move_to', target: S.settingsModelsTab },
-    { kind: 'popup', text: 'Click here!' },
+    { kind: 'popup', text: 'Hop over to Models.' },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.settingsModelsTab },
@@ -36,7 +36,7 @@ export const step01: OnboardingStep = {
             {
               kind: 'highlight_section',
               target: S.settingsProSection,
-              popup: 'Choose a tier',
+              popup: 'Pick a tier you like.',
             },
           ],
         },
@@ -47,7 +47,7 @@ export const step01: OnboardingStep = {
             {
               kind: 'highlight_section',
               target: S.settingsExternalSubs,
-              popup: 'Connect a subscription',
+              popup: 'Hook up your subscription here.',
             },
           ],
         },
@@ -58,7 +58,7 @@ export const step01: OnboardingStep = {
             {
               kind: 'highlight_section',
               target: S.settingsApiKeys,
-              popup: 'Add an API key',
+              popup: 'Drop your API key in.',
             },
           ],
         },
@@ -74,7 +74,7 @@ export const step01: OnboardingStep = {
       hint: 'Finish connecting your model.',
     },
     { kind: 'move_to', target: S.settingsCloseButton },
-    { kind: 'popup', text: 'Click here!' },
+    { kind: 'popup', text: 'Nice! Close it up.' },
     {
       kind: 'wait_user',
       condition: { kind: 'event_bus', event: 'settings:closed' },

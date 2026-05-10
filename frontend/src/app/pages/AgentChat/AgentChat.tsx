@@ -388,6 +388,11 @@ const AgentChat: React.FC<AgentChatProps> = ({ sessionId: sessionIdProp, onClose
     const el = scrollContainerRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      // Pinch-to-zoom (ctrl/meta + wheel) must reach the canvas viewport so
+      // the dashboard zooms when the cursor is over an agent's chat panel.
+      // Without this early-out the unconditional stopPropagation below kills
+      // ctrl+wheel and the canvas listener never fires.
+      if (e.ctrlKey || e.metaKey) return;
       const atTop = el.scrollTop <= 0;
       const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
       const scrollingDown = e.deltaY > 0;

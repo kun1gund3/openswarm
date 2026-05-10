@@ -115,10 +115,42 @@ const OnboardingRoot: React.FC = () => {
     seedStatuses();
 
     let pending = false;
+    // Cached slice references — if these are referentially equal to what
+    // we saw last microtask, NOTHING we care about could have changed.
+    // Redux Toolkit's Immer produces new references only on slice writes,
+    // so identity comparison is sound and ~free. Drops the steady-state
+    // cost of this subscriber to a 5-pointer comparison per microtask.
+    let prevAgents: unknown = null;
+    let prevDashboardLayout: unknown = null;
+    let prevOutputs: unknown = null;
+    let prevSkills: unknown = null;
+    let prevSettings: unknown = null;
 
     const runCheck = () => {
       pending = false;
       const state = store.getState();
+      // Reference-equality early-out. If none of the slices that drive
+      // any predicate, count, or status walk have changed reference,
+      // there's no work to do. Streaming chunks, agent message updates,
+      // settings polls all dispatch but most of them touch a single
+      // unrelated slice — so this skips ~95% of microtask wakeups.
+      const sAgents = (state as any).agents;
+      const sLayout = state.dashboardLayout;
+      const sOutputs = (state as any).outputs;
+      const sSkills = (state as any).skills;
+      const sSettings = (state as any).settings;
+      const anyChanged =
+        sAgents !== prevAgents ||
+        sLayout !== prevDashboardLayout ||
+        sOutputs !== prevOutputs ||
+        sSkills !== prevSkills ||
+        sSettings !== prevSettings;
+      prevAgents = sAgents;
+      prevDashboardLayout = sLayout;
+      prevOutputs = sOutputs;
+      prevSkills = sSkills;
+      prevSettings = sSettings;
+      if (!anyChanged) return;
       const suppressSkipIf = state.onboardingProgress?.disableSkipIf === true;
 
       // Capture the baseline of pre-satisfied predicates after the

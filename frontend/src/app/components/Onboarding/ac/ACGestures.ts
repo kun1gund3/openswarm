@@ -100,63 +100,6 @@ export function spawnGlowRect(target: HTMLElement, color: string): () => void {
   };
 }
 
-// Lighter "what AC is pointing at" highlight — softer than spawnGlowRect
-// and follows the live rect each frame so the ring stays glued through
-// reflows / scrolls. Used by the runtime alongside startTracking so the
-// user can always see what AC is gesturing toward.
-export function spawnLiveTargetGlow(
-  target: HTMLElement,
-  color: string,
-): () => void {
-  const el = document.createElement('div');
-  el.style.cssText = [
-    'position: fixed',
-    'border-radius: 8px',
-    // Sleek mode: thin 1px border at ~40% opacity, no inset glow, just a
-    // soft outer halo. Reads as "this is what AC is pointing at" without
-    // looking like a marketing demo or selection indicator. Previous
-    // 1.5px @ 60% + inset glow was too heavy.
-    `border: 1px solid ${color}66`,
-    `box-shadow: 0 0 0 1px ${color}1f, 0 0 8px ${color}33`,
-    'pointer-events: none',
-    'z-index: 10497',
-    'opacity: 0',
-    'transition: opacity 0.2s ease',
-    'transform: translateZ(0)',
-  ].join(';');
-  document.body.appendChild(el);
-
-  let cancelled = false;
-  let cachedTarget: HTMLElement | null = target;
-  const PAD = 4;
-  const update = () => {
-    if (cancelled) return;
-    if (!cachedTarget?.isConnected) {
-      // Target gone — fade out.
-      el.style.opacity = '0';
-      return;
-    }
-    const r = cachedTarget.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) {
-      el.style.opacity = '0';
-    } else {
-      el.style.left = `${r.left - PAD}px`;
-      el.style.top = `${r.top - PAD}px`;
-      el.style.width = `${r.width + PAD * 2}px`;
-      el.style.height = `${r.height + PAD * 2}px`;
-      if (el.style.opacity !== '1') el.style.opacity = '1';
-    }
-    requestAnimationFrame(update);
-  };
-  requestAnimationFrame(update);
-
-  return () => {
-    cancelled = true;
-    el.style.opacity = '0';
-    window.setTimeout(() => el.remove(), 240);
-  };
-}
-
 // Wait helper used between ops. Avoids `setTimeout` everywhere.
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => window.setTimeout(r, ms));

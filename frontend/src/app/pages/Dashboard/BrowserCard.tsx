@@ -205,6 +205,16 @@ const BrowserCard: React.FC<Props> = ({
         const targetUrl = tab.url;
         const doLoad = () => {
           wv.loadURL(targetUrl).catch(() => {});
+          // Lock the guest's pinch/page zoom at 1.0 so ctrl+wheel inside the
+          // webview never triggers Chromium's in-page zoom — the guest
+          // preload forwards the gesture to the host, where the dashboard
+          // canvas zoom takes over (issue #27). Without this lock, certain
+          // pages (or trackpad pinch on macOS) can still nudge the in-page
+          // zoom even when the wheel-event preventDefault fires.
+          try {
+            (wv as any).setVisualZoomLevelLimits?.(1, 1);
+            (wv as any).setZoomFactor?.(1);
+          } catch (_) {}
         };
         wv.addEventListener('dom-ready', doLoad, { once: true });
         cleanups.push(() => wv.removeEventListener('dom-ready', doLoad));
@@ -224,6 +234,30 @@ const BrowserCard: React.FC<Props> = ({
         console.warn('[openswarm:card] webview ipc-message:', e?.channel, e?.args);
         if (e?.channel === 'passkey-detected') {
           setPasskeyDialogOpen(true);
+        } else if (e?.channel === 'canvas-wheel-zoom') {
+          // ctrl/meta+wheel inside the webview — the guest preload caught
+          // it and forwarded the deltas + guest-local cursor coords. Convert
+          // guest coords → document coords using the webview's bounding rect,
+          // then dispatch a CustomEvent on window. useCanvasControls listens
+          // for this and runs the same zoom-around-cursor math its wheel
+          // handler uses. We do NOT dispatch a synthetic WheelEvent from the
+          // <webview> element — that bubble path turned out to be
+          // unreliable through Electron's GuestView, which is why ctrl+wheel
+          // over a selected browser was still getting eaten.
+          const payload = e.args?.[0] || {};
+          const wvRect = wv.getBoundingClientRect();
+          const docX = wvRect.left + (payload.clientX ?? 0);
+          const docY = wvRect.top + (payload.clientY ?? 0);
+          window.dispatchEvent(
+            new CustomEvent('openswarm:canvas-wheel-zoom', {
+              detail: {
+                deltaY: payload.deltaY ?? 0,
+                deltaMode: payload.deltaMode ?? 0,
+                clientX: docX,
+                clientY: docY,
+              },
+            }),
+          );
         }
       };
 

@@ -22,6 +22,8 @@ from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+from fastapi import Body
+
 from backend.config.Apps import SubApp
 from backend.config.paths import SESSIONS_DIR
 from backend.apps.service import client as svc
@@ -407,8 +409,8 @@ async def service_status():
 # ---------------------------------------------------------------------------
 
 @service.router.post("/submit")
-async def post_submit(body: dict):
-    """Accepts two body shapes for backward compatibility:
+async def post_submit(body=Body(...)):
+    """Accepts three body shapes for backward compatibility:
 
     1. Frontend `report()` shape — flat `{s, a, p, submission_id, t}`.
        This is what `frontend/src/shared/serviceClient.ts:report()` sends
@@ -419,12 +421,31 @@ async def post_submit(body: dict):
        the payload in a kind+payload envelope before submitting. Unwrap
        and forward the payload.
 
+    3. Batched array — frontend collects up to 1s of events and sends them
+       as a single JSON array to cut N POSTs/sec down to 1. Each item is
+       processed exactly as if it had arrived as its own request.
+
     Pre-fix this endpoint required shape #2 and silently rejected shape #1
     with a 200 + `{ok:false}`, so every UI event from `report()` was
     dropped — `frontend.event` count was 0 in production analytics.
     """
+    # Shape 3: batched array. Recurse per-item so single-item handling
+    # logic stays in one place. Returns a single ok regardless of
+    # individual item shape — analytics calls aren't transactional.
+    if isinstance(body, list):
+        for item in body:
+            if isinstance(item, dict):
+                if any(k in item for k in ("s", "a", "p")):
+                    svc.sync(item)
+                    continue
+                kind = item.get("kind") or ""
+                payload = item.get("payload") or {}
+                if isinstance(payload, dict):
+                    payload.setdefault("kind", kind)
+                    svc.sync(payload)
+        return {"ok": True}
     if not isinstance(body, dict):
-        return {"ok": False, "error": "JSON object required"}
+        return {"ok": False, "error": "JSON object or array required"}
     # Shape 1: frontend `report()` — flat {s, a, p, ...}
     if any(k in body for k in ("s", "a", "p")):
         svc.sync(body)

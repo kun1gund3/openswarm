@@ -13,13 +13,17 @@ export const step05: OnboardingStep = {
   dependsOn: [{ stepId: 'use_browser', reopen: 'walk_again' }],
   ops: [
     { kind: 'move_to', target: S.newAgentButton },
-    { kind: 'popup', text: 'Spin up a new agent that will use the browser.' },
+    { kind: 'popup', text: 'Time for a fresh chat that surfs the web.' },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.newAgentButton },
     },
-    { kind: 'move_to', target: S.elementSelectionToggle },
-    { kind: 'popup', text: 'Click here to attach a browser to this agent.' },
+    // Offset nudge: cursor SVG is asymmetric (tip top-left, body down-right),
+    // so default rect-center pinning makes the body bleed over the
+    // paperclip "Attach file" button right next to this icon. Pulling
+    // the tip ~8px left keeps the body inside this icon's footprint.
+    { kind: 'move_to', target: S.elementSelectionToggle, offset: { x: -8, y: 0 } },
+    { kind: 'popup', text: 'Tap here to plug a browser into this chat.' },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.elementSelectionToggle },
@@ -30,7 +34,7 @@ export const step05: OnboardingStep = {
     { kind: 'drag_select', target: 'browser-card' },
     {
       kind: 'popup',
-      text: 'Now you try — drag a box around the browser card to attach it.',
+      text: 'Now you try! Drag a box around the browser to link it.',
     },
     {
       kind: 'wait_user',
@@ -46,6 +50,20 @@ export const step05: OnboardingStep = {
     },
     { kind: 'move_to', target: S.chatSendButton },
     { kind: 'click', target: S.chatSendButton, simulate: true },
+    // Quick canvas-controls tour, NOT a real step. The user now has a
+    // browser + chat on the canvas, which is the first time those
+    // toolbar buttons (fit-to-view, tidy, minimap) actually have
+    // anything meaningful to do. AC just hovers each one and drops a
+    // single short popup; no waits, no clicks expected from the user.
+    { kind: 'move_to', target: S.canvasFitToView },
+    { kind: 'popup', text: 'Heads up! This snaps everything back into view.' },
+    { kind: 'delay', ms: 1800 },
+    { kind: 'move_to', target: S.canvasTidyLayout },
+    { kind: 'popup', text: 'And this auto tidies your layout.' },
+    { kind: 'delay', ms: 1800 },
+    { kind: 'move_to', target: S.canvasMinimapToggle },
+    { kind: 'popup', text: 'Pop on a minimap whenever things get crowded.' },
+    { kind: 'delay', ms: 1800 },
     { kind: 'outro' },
   ],
 };

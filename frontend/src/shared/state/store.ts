@@ -33,6 +33,22 @@ export const store = configureStore({
     interaction: interactionReducer,
     onboardingProgress: onboardingProgressReducer,
   },
+  // Disable Redux Toolkit's dev-mode invariant middleware (serializable +
+  // immutable checks). These deep-walk the entire state on every dispatch,
+  // and our state is large enough to trigger 30-50ms pauses on hot paths
+  // (agent streaming, websocket heartbeats, settings sync). Console warns
+  // "SerializableStateInvariantMiddleware took 41ms" repeatedly under load.
+  //
+  // Production builds skip these middlewares anyway, so disabling them in
+  // dev makes dev behavior match prod — no surprises at packaging time.
+  // Trade-off: serializability bugs (e.g. accidentally putting a Map or
+  // Date directly into state) won't be caught at dev time. We've shipped
+  // many versions with stable slice shapes; that risk is now low.
+  middleware: (getDefault) =>
+    getDefault({
+      serializableCheck: false,
+      immutableCheck: false,
+    }),
 });
 
 export type RootState = ReturnType<typeof store.getState>;

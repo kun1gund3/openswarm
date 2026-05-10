@@ -22,10 +22,34 @@ interface Props {
   onMinimapPan: (panX: number, panY: number) => void;
 }
 
+// Persist the minimap open/closed state across reloads so a user who
+// toggles it on doesn't lose their preference. Default is OFF — most
+// users don't have enough cards on the canvas for the minimap to add
+// value, and it occupies real estate. The onboarding tip in step 5/6
+// surfaces the toggle so users discover it when they DO have enough on
+// the canvas to benefit.
+const MINIMAP_PREF_KEY = 'openswarm.canvas.minimap_open';
+function readMinimapPref(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(MINIMAP_PREF_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 const CanvasControls: React.FC<Props> = ({ zoom, actions, onFitToView, onTidy, minimapProps, onMinimapPan }) => {
   const c = useClaudeTokens();
   const pct = Math.round(zoom * 100);
-  const [minimapOpen, setMinimapOpen] = useState(true);
+  const [minimapOpen, setMinimapOpen] = useState<boolean>(() => readMinimapPref());
+  const setAndPersistMinimap = (next: boolean) => {
+    setMinimapOpen(next);
+    try {
+      window.localStorage.setItem(MINIMAP_PREF_KEY, String(next));
+    } catch {
+      /* private mode etc — not fatal */
+    }
+  };
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0.75 }}>
@@ -95,13 +119,23 @@ const CanvasControls: React.FC<Props> = ({ zoom, actions, onFitToView, onTidy, m
         <Box sx={{ width: 1, height: 16, bgcolor: c.border.medium, mx: 0.5 }} />
 
         <Tooltip title="Fit to view" placement="top">
-          <IconButton size="small" onClick={onFitToView} sx={{ color: c.text.muted }}>
+          <IconButton
+            size="small"
+            onClick={onFitToView}
+            sx={{ color: c.text.muted }}
+            data-onboarding="canvas-fit-to-view"
+          >
             <FitScreenIcon sx={{ fontSize: '1rem' }} />
           </IconButton>
         </Tooltip>
 
         <Tooltip title="Tidy layout" placement="top">
-          <IconButton size="small" onClick={onTidy} sx={{ color: c.text.muted }}>
+          <IconButton
+            size="small"
+            onClick={onTidy}
+            sx={{ color: c.text.muted }}
+            data-onboarding="canvas-tidy-layout"
+          >
             <AutoAwesomeIcon sx={{ fontSize: '1rem' }} />
           </IconButton>
         </Tooltip>
@@ -111,8 +145,9 @@ const CanvasControls: React.FC<Props> = ({ zoom, actions, onFitToView, onTidy, m
         <Tooltip title={minimapOpen ? 'Hide minimap' : 'Show minimap'} placement="top">
           <IconButton
             size="small"
-            onClick={() => setMinimapOpen((v) => !v)}
+            onClick={() => setAndPersistMinimap(!minimapOpen)}
             sx={{ color: minimapOpen ? c.accent.primary : c.text.muted }}
+            data-onboarding="canvas-minimap-toggle"
           >
             <MapIcon sx={{ fontSize: '1rem' }} />
           </IconButton>

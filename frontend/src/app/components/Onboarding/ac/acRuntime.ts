@@ -22,7 +22,6 @@ import { onboardingBus, type OnboardingEvent } from '../eventBus';
 import { waitForSelector } from '../selectors';
 import {
   spawnGlowRect,
-  spawnLiveTargetGlow,
   clickRipple,
   animateDragSelect,
   sleep,
@@ -47,10 +46,6 @@ interface RunContext {
   findStep: (id: string) => OnboardingStep | undefined;
   // Cleanup for the highlight_section big glow.
   highlightCleanup: { current: (() => void) | null };
-  // Cleanup for the live "AC is pointing here" target ring. Spawned
-  // alongside startTracking and disposed alongside stopTracking — gives
-  // the user a clear visual cue of what AC is gesturing toward.
-  targetGlowCleanup: { current: (() => void) | null };
 }
 
 export interface RunStepArgs {
@@ -81,7 +76,6 @@ export async function runStep(args: RunStepArgs): Promise<void> {
   report('step_started', { step_id: step.id, stage: step.stage });
 
   const highlightCleanup: { current: (() => void) | null } = { current: null };
-  const targetGlowCleanup: { current: (() => void) | null } = { current: null };
   const ctx: RunContext = {
     ac,
     store,
@@ -92,7 +86,6 @@ export async function runStep(args: RunStepArgs): Promise<void> {
     stepId: step.id,
     findStep,
     highlightCleanup,
-    targetGlowCleanup,
   };
 
   try {
@@ -194,10 +187,6 @@ export async function runStep(args: RunStepArgs): Promise<void> {
       highlightCleanup.current();
       highlightCleanup.current = null;
     }
-    if (targetGlowCleanup.current) {
-      targetGlowCleanup.current();
-      targetGlowCleanup.current = null;
-    }
     store.dispatch(setRunning(false));
     clearStepTiming();
   }
@@ -268,14 +257,21 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
       ctx.highlightCleanup.current();
       ctx.highlightCleanup.current = null;
     }
-    if (ctx.targetGlowCleanup.current) {
-      ctx.targetGlowCleanup.current();
-      ctx.targetGlowCleanup.current = null;
-    }
   }
 
   switch (op.kind) {
     case 'move_to': {
+      // Pre-flight: if the target lives inside a collapsed Customization
+      // section, walk the user through expanding it first. This is the
+      // "asks me to click on it twice" fix — without this guard, AC's
+      // popup pointed at an Actions/Skills/Modes item that wasn't yet
+      // visible, the user would click Customization to reveal it (which
+      // didn't satisfy the wait), then click the item, looking like a
+      // duplicate prompt.
+      const expandOps = maybeBuildExpandCustomizationOps(op.target);
+      if (expandOps) {
+        await runOps(expandOps, ctx);
+      }
       const el = await waitForSelector(op.target);
       const scrolled = scrollIntoViewIfNeeded(el);
       // Cheaper rect-settle: instead of unconditionally sleeping 180ms
@@ -314,12 +310,6 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
       }
       await ac.moveTo(cx, cy);
       ac.startTracking(op.target, op.offset);
-      // Live target glow — gives the user a clear "this is what AC
-      // is pointing at" visual. Replaces any previous target glow.
-      if (ctx.targetGlowCleanup.current) {
-        ctx.targetGlowCleanup.current();
-      }
-      ctx.targetGlowCleanup.current = spawnLiveTargetGlow(el, accentColor);
       return;
     }
     case 'popup': {
@@ -377,8 +367,6 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
       const r = el.getBoundingClientRect();
       await ac.moveTo(Math.min(r.right - 14, r.left + r.width / 2), r.top + r.height / 2);
       ac.startTracking(op.target, { x: 0, y: 0 });
-      if (ctx.targetGlowCleanup.current) ctx.targetGlowCleanup.current();
-      ctx.targetGlowCleanup.current = spawnLiveTargetGlow(el, accentColor);
       await typeInto(el, op.text, { speedMs: op.speedMs });
       return;
     }
@@ -421,8 +409,25 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
       const toX = r.right + 12;
       const toY = r.bottom + 12;
       await ac.moveTo(fromX, fromY);
-      await animateDragSelect({ fromX, fromY, toX, toY }, accentColor);
-      await ac.moveTo(toX, toY);
+      // Run the cursor and the dashed-rect animation in parallel, so the
+      // cursor visually leads the selection from top-left to bottom-right
+      // (matching how a real drag works) instead of stranding itself at
+      // the start corner while the box draws itself across the target.
+      // The cursor uses a 600ms tween with the same cubic-bezier the rect
+      // uses (ACGestures.ts) so the two motions stay in lock-step. Spring
+      // physics here would overshoot and desync from the CSS transition.
+      const RECT_DURATION_MS = 600;
+      await Promise.all([
+        animateDragSelect(
+          { fromX, fromY, toX, toY },
+          accentColor,
+          RECT_DURATION_MS,
+        ),
+        ac.moveTo(toX, toY, {
+          duration: RECT_DURATION_MS / 1000,
+          ease: [0.4, 0, 0.2, 1],
+        }),
+      ]);
       // No tracking after drag_select — the visual ends at a calculated
       // bottom-right corner, not the center of any element. Next op
       // (typically wait_user or move_to) takes over positioning.
@@ -500,24 +505,85 @@ function isInDashboardRoute(): boolean {
 }
 
 // Ops the runtime prepends when a step requires being inside a dashboard
-// but the user isn't. First click expands the Dashboards section in the
-// sidebar (so the rows render), second click selects the first row to
-// navigate into that dashboard. Both clicks are user-driven — we don't
-// teleport — so the user understands where they ended up.
+// but the user isn't. State-aware: reads the live DOM to skip sub-steps
+// the user has already satisfied, so we never force a click that would
+// undo the desired state (e.g. clicking the Dashboards section header
+// when it's already expanded — which would collapse it).
+//
+// The two sub-conditions:
+//   1. Sidebar Dashboards section is expanded (so rows are visible).
+//      Marked via data-expanded="true" / aria-expanded="true" on the
+//      ListItemButton in AppShell.
+//   2. The user has clicked into a dashboard (route #/dashboard/<id>).
+//
+// If (1) is already met, we skip the section-click. If (2) is met, we
+// don't run any of these ops at all — the caller already gates on
+// isInDashboardRoute().
 function buildOpenDashboardOps(): ACOp[] {
-  return [
-    { kind: 'move_to', target: 'sidebar-dashboards' },
-    { kind: 'popup', text: 'Open the Dashboards list.' },
-    {
-      kind: 'wait_user',
-      condition: { kind: 'click_target', target: 'sidebar-dashboards' },
-      timeoutMs: 60000,
-    },
+  const sectionEl = document.querySelector<HTMLElement>(
+    '[data-onboarding="sidebar-dashboards"]',
+  );
+  const sectionExpanded =
+    sectionEl?.dataset.expanded === 'true' ||
+    sectionEl?.getAttribute('aria-expanded') === 'true';
+
+  const ops: ACOp[] = [];
+  if (!sectionExpanded) {
+    ops.push(
+      { kind: 'move_to', target: 'sidebar-dashboards' },
+      { kind: 'popup', text: 'Open the Dashboards list.' },
+      {
+        kind: 'wait_user',
+        condition: { kind: 'click_target', target: 'sidebar-dashboards' },
+        timeoutMs: 60000,
+      },
+    );
+  }
+  ops.push(
     { kind: 'move_to', target: 'dashboard-row-first' },
     { kind: 'popup', text: 'Click into a dashboard to continue.' },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: 'dashboard-row-first' },
+      timeoutMs: 60000,
+    },
+  );
+  return ops;
+}
+
+// Set of targets that live INSIDE the sidebar's Customization collapse.
+// If a step's move_to points at one of these and the section is closed,
+// the user can't see (or click) the target — they'd have to click
+// Customization first to expand it. The runtime checks this before each
+// move_to and, if needed, walks the user through the expand-click first.
+// Same pattern as buildOpenDashboardOps: state-aware, no redundant clicks.
+const CUSTOMIZATION_AREA_TARGETS = new Set<string>([
+  'sidebar-actions',
+  'sidebar-skills',
+  'sidebar-modes',
+]);
+
+/**
+ * If the requested target lives inside the Customization collapse and the
+ * section is currently closed, return ops to walk the user through
+ * expanding it. Otherwise return null. Caller should runOps() the result
+ * before its own move_to.
+ */
+function maybeBuildExpandCustomizationOps(target: string): ACOp[] | null {
+  if (!CUSTOMIZATION_AREA_TARGETS.has(target)) return null;
+  const header = document.querySelector<HTMLElement>(
+    '[data-onboarding="sidebar-customization"]',
+  );
+  const expanded =
+    header?.dataset.expanded === 'true' ||
+    header?.getAttribute('aria-expanded') === 'true';
+  if (expanded) return null;
+  return [
+    { kind: 'move_to', target: 'sidebar-customization' },
+    { kind: 'popup', text: 'Open Customization.' },
+    {
+      kind: 'wait_user',
+      condition: { kind: 'click_target', target: 'sidebar-customization' },
       timeoutMs: 60000,
     },
   ];

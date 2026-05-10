@@ -620,6 +620,13 @@ const AppShell: React.FC = () => {
             <ListItemButton
               onClick={handleDashboardsClick}
               data-onboarding="sidebar-dashboards"
+              // Expose expanded state so the onboarding runtime can
+              // skip the sidebar-click step when the section is already
+              // open (clicking it again would collapse it — opposite
+              // of what we want). Read via element.dataset.expanded /
+              // aria-expanded in the runtime guard.
+              data-expanded={dashboardsExpanded ? 'true' : 'false'}
+              aria-expanded={dashboardsExpanded}
               sx={{
                 borderRadius: 1.5,
                 py: 0.6,
@@ -784,6 +791,9 @@ const AppShell: React.FC = () => {
                   setCustomizationExpanded(true);
                 }
               }}
+              data-onboarding="sidebar-customization"
+              data-expanded={customizationExpanded ? 'true' : 'false'}
+              aria-expanded={customizationExpanded}
               sx={{
                 borderRadius: 1.5,
                 py: 0.6,

@@ -49,6 +49,10 @@ export function useCanvasControls(zoomSensitivity: number = 50, contentBounds?: 
   contentBoundsRef.current = contentBounds;
   const animFrameRef = useRef<number | null>(null);
   const inertiaFrameRef = useRef<number | null>(null);
+  // Pending fit-target settle timer (see fitToCards). Cancelled when
+  // any new pan/zoom/animation kicks off so a stale settle never
+  // overrides fresh user input or a back-to-back fitToCards call.
+  const settleTimerRef = useRef<number | null>(null);
 
   // ---- Velocity tracking for momentum panning ----
   const velocityHistoryRef = useRef<Array<{ x: number; y: number; t: number }>>([]);
@@ -136,6 +140,13 @@ export function useCanvasControls(zoomSensitivity: number = 50, contentBounds?: 
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
+    }
+    // Also kill any pending fit-target settle so a stale snap doesn't
+    // fire after the user has started panning or after a fresh
+    // fitToCards call has set a different target.
+    if (settleTimerRef.current !== null) {
+      window.clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
     }
   }, []);
 
@@ -243,7 +254,39 @@ export function useCanvasControls(zoomSensitivity: number = 50, contentBounds?: 
     };
 
     el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
+
+    // ctrl/meta+wheel events that originate inside an Electron <webview>
+    // never bubble out of the guest into the host DOM, so the wheel
+    // listener above can't see them. BrowserCard's preload-bridge
+    // forwards those gestures via this CustomEvent (issue #27); we run
+    // the same zoom-around-cursor math the wheel handler uses.
+    const onForwardedZoom = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      const dy = detail.deltaMode === 1 ? detail.deltaY * 40 : detail.deltaY;
+      const rect = el.getBoundingClientRect();
+      const cx = (detail.clientX ?? 0) - rect.left;
+      const cy = (detail.clientY ?? 0) - rect.top;
+      if (inertiaFrameRef.current) {
+        cancelAnimationFrame(inertiaFrameRef.current);
+        inertiaFrameRef.current = null;
+      }
+      setState((prev) => {
+        const factor = Math.pow(2, -dy * sensitivityToMultiplier(sensitivityRef.current));
+        const newZoom = clamp(prev.zoom * factor, MIN_ZOOM, MAX_ZOOM);
+        const ratio = newZoom / prev.zoom;
+        return {
+          panX: cx - (cx - prev.panX) * ratio,
+          panY: cy - (cy - prev.panY) * ratio,
+          zoom: newZoom,
+        };
+      });
+    };
+    window.addEventListener('openswarm:canvas-wheel-zoom', onForwardedZoom);
+
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      window.removeEventListener('openswarm:canvas-wheel-zoom', onForwardedZoom);
+    };
   }, [enabled]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -521,13 +564,14 @@ export function useCanvasControls(zoomSensitivity: number = 50, contentBounds?: 
         animateTo(target);
         // Settle pass — re-run the math one frame after the animation
         // ends and snap-correct any drift from viewport changes during
-        // the flight (sidebar collapse, route switch, etc). Without
-        // this, the camera lands on stale-target coords while the
-        // minimap reads the current panX/panY, producing the visible
-        // mismatch the user reported. ~370ms = animation length (320)
-        // + one rAF settle. Cheap: a single getBoundingClientRect +
-        // potential setState if drift > threshold.
-        window.setTimeout(() => {
+        // the flight (sidebar collapse, route switch, etc). Stored in
+        // a ref so cancelAnimation() can cancel it — without that,
+        // back-to-back fitToCards calls would race: first call's settle
+        // would fire 370ms later and overwrite the second call's
+        // result, leaving the camera on the WRONG target while the
+        // minimap accurately reflects the broken state.
+        settleTimerRef.current = window.setTimeout(() => {
+          settleTimerRef.current = null;
           const fresh = computeFitTarget(cardRects, maxZoom, minZoom);
           if (!fresh) return;
           const cur2 = stateRef.current;
@@ -535,8 +579,6 @@ export function useCanvasControls(zoomSensitivity: number = 50, contentBounds?: 
             Math.abs(cur2.panX - fresh.panX) +
             Math.abs(cur2.panY - fresh.panY) +
             Math.abs(cur2.zoom - fresh.zoom) * 1000;
-          // 8px-equivalent drift threshold — anything below is invisible
-          // to the user and not worth a snap that could itself jitter.
           if (drift > 8) setState(fresh);
         }, 370);
       } else {

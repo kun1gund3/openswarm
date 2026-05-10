@@ -16,16 +16,17 @@ export const step06: OnboardingStep = {
     // popup below tells the user to imagine they made it themselves.
     {
       kind: 'popup',
-      text: "Pretend this agent already did some research for you. We'll have a NEW agent orchestrate it.",
+      text: "Pretend this chat already did the homework. Now we'll have a fresh one boss it around.",
     },
     { kind: 'move_to', target: S.newAgentButton },
-    { kind: 'popup', text: 'Spin up a new agent — this one will be the orchestrator.' },
+    { kind: 'popup', text: "Make a new chat. This one's the boss." },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.newAgentButton },
     },
-    { kind: 'move_to', target: S.elementSelectionToggle },
-    { kind: 'popup', text: 'Click here to attach the existing agent.' },
+    // See step05 — same nudge to keep cursor body off the adjacent paperclip.
+    { kind: 'move_to', target: S.elementSelectionToggle, offset: { x: -8, y: 0 } },
+    { kind: 'popup', text: 'Tap here to hook in the older chat.' },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.elementSelectionToggle },
@@ -33,7 +34,7 @@ export const step06: OnboardingStep = {
     { kind: 'drag_select', target: 'agent-card' },
     {
       kind: 'popup',
-      text: 'Now you try — drag a box around the agent card to attach it as a sub-agent.',
+      text: 'Your turn! Lasso the chat to make it a helper.',
     },
     {
       kind: 'wait_user',
@@ -63,7 +64,7 @@ export const step06: OnboardingStep = {
     },
     {
       kind: 'popup',
-      text: 'Your orchestrator is on it. The PDF will land in Downloads when the sub-agents finish — feel free to keep exploring while they work.',
+      text: "On it! Your PDF will pop into Downloads when everyone's done. Go poke around in the meantime.",
     },
     { kind: 'delay', ms: 4000 },
     { kind: 'outro' },

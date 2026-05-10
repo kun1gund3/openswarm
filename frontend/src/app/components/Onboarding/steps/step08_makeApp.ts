@@ -11,13 +11,13 @@ export const step08: OnboardingStep = {
   videoDurationLabel: '0:42',
   ops: [
     { kind: 'move_to', target: S.sidebarApps },
-    { kind: 'popup', text: 'Click here!' },
+    { kind: 'popup', text: 'Swing by Apps.' },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.sidebarApps },
     },
     { kind: 'move_to', target: S.appsNewButton },
-    { kind: 'popup', text: 'Click here!' },
+    { kind: 'popup', text: 'Spin up a fresh one.' },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.appsNewButton },
@@ -49,7 +49,7 @@ export const step08: OnboardingStep = {
     },
     {
       kind: 'popup',
-      text: "Your app is being built! It'll show up shortly — feel free to keep exploring while the agent works.",
+      text: "Cooking up your app! It'll pop up in a sec. Go explore while it brews.",
     },
     { kind: 'delay', ms: 4000 },
     { kind: 'outro' },

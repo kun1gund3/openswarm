@@ -14,7 +14,7 @@ export const step03: OnboardingStep = {
   requiresDashboard: true,
   ops: [
     { kind: 'move_to', target: S.newAgentButton },
-    { kind: 'popup', text: 'Click here!' },
+    { kind: 'popup', text: 'Tap the plus to start a fresh chat.' },
     {
       kind: 'wait_user',
       condition: { kind: 'click_target', target: S.newAgentButton },

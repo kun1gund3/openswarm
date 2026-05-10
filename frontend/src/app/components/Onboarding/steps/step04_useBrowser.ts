@@ -18,7 +18,7 @@ export const step04: OnboardingStep = {
   requiresDashboard: true,
   ops: [
     { kind: 'move_to', target: S.browserButton },
-    { kind: 'popup', text: 'Click here!' },
+    { kind: 'popup', text: 'Pop open a browser.' },
     {
       kind: 'wait_user',
       condition: { kind: 'event_bus', event: 'browser:spawned' },

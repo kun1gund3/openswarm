@@ -50,6 +50,19 @@ export const S = {
   actionsRedditChevron: 'actions-reddit-chevron',
   actionsSubredditsChevron: 'actions-subreddits-chevron',
   actionsPermissionToggle: 'actions-permission-toggle',
+  actionsYoutubeToggle: 'actions-youtube-toggle',
+  actionsYoutubeChevron: 'actions-youtube-chevron',
+
+  // canvas controls toolbar — used by the inline tour-tip in step 5
+  // that flags fit-to-view / tidy / minimap once the user has multiple
+  // cards on the canvas.
+  canvasFitToView: 'canvas-fit-to-view',
+  canvasTidyLayout: 'canvas-tidy-layout',
+  canvasMinimapToggle: 'canvas-minimap-toggle',
+  // sidebar Customization section header — used by the runtime guard
+  // that auto-expands it before targeting Actions / Skills / Modes
+  // (which live inside the collapsed area).
+  sidebarCustomization: 'sidebar-customization',
 
   // new — skills page
   skillItemPdf: 'skill-item-pdf',

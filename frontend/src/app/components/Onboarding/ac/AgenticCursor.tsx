@@ -17,7 +17,17 @@ import type { ACMultiChoiceOption } from '../steps/types';
 export interface AgenticCursorHandle {
   fadeIn: (from: { x: number; y: number }) => Promise<void>;
   fadeOut: (to: { x: number; y: number }) => Promise<void>;
-  moveTo: (x: number, y: number) => Promise<void>;
+  /**
+   * Animated jump to (x, y). Defaults to the spring used for normal hops;
+   * pass an override (e.g. a tween) when the cursor needs to ride alongside
+   * a CSS-transitioned visual like the drag-select rect, where spring
+   * overshoot would visibly desync from the rect's bottom-right corner.
+   */
+  moveTo: (
+    x: number,
+    y: number,
+    transition?: Record<string, unknown>,
+  ) => Promise<void>;
   pressClick: () => Promise<void>;
   /**
    * Lock the cursor to a live data-onboarding selector. After this is
@@ -115,7 +125,7 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
         transition: { duration: 0.32, ease: 'easeOut' },
       });
     },
-    async moveTo(x, y) {
+    async moveTo(x, y, transition) {
       // moveTo is for animated jumps to a fixed coord. Stop any prior
       // tracker first so it doesn't keep snapping the cursor back to its
       // old anchor mid-animation. The runtime calls startTracking after
@@ -124,7 +134,7 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
       await controls.start({
         x,
         y,
-        transition: SPRING,
+        transition: transition ?? SPRING,
       });
       writePos(x, y, true);
     },
@@ -174,8 +184,23 @@ const AgenticCursor = forwardRef<AgenticCursorHandle>((_props, ref) => {
       // there lands it on the macOS traffic lights / Electron drag-area
       // — never an intentional onboarding target. Skip those frames.
       const TITLE_BAR_BOTTOM = 38;
+      // Throttle the rAF tracker to ~30fps. The browser fires rAF at the
+      // monitor refresh (60-144Hz typically), and re-querying rects +
+      // applying transforms every single frame is wasted work for what
+      // is fundamentally a "follow this rect" loop. 30fps still feels
+      // glued because the visible jitter threshold for static UI is
+      // higher than for animated UI. Halves rAF callback cost during
+      // pinned ops.
+      let lastTickAt = 0;
+      const TICK_INTERVAL_MS = 33; // ~30fps
       const tick = () => {
         if (cancelled) return;
+        const now = performance.now();
+        if (now - lastTickAt < TICK_INTERVAL_MS) {
+          rafId = requestAnimationFrame(tick);
+          return;
+        }
+        lastTickAt = now;
 
         if (!cachedEl || !cachedEl.isConnected) {
           cachedEl = resolveSelector(selector);

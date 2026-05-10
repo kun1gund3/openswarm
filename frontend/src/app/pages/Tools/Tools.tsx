@@ -1425,7 +1425,13 @@ const Tools: React.FC = () => {
                           <Typography sx={{ color: c.text.muted, fontSize: '0.84rem' }}>{ig.description}</Typography>
                         </Box>
                         <Box
-                          data-onboarding={ig.id === 'reddit' ? 'actions-reddit-toggle' : undefined}
+                          data-onboarding={
+                            ig.id === 'youtube'
+                              ? 'actions-youtube-toggle'
+                              : ig.id === 'reddit'
+                                ? 'actions-reddit-toggle'
+                                : undefined
+                          }
                           sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}
                         >
                           {isLoading && <CircularProgress size={16} sx={{ color: ig.color }} />}
@@ -1494,22 +1500,27 @@ const Tools: React.FC = () => {
                   </Box>
                 );
 
-                const ServiceGroup = ({ serviceName, data }: { serviceName: string; data: { read?: string[]; write?: string[] } }) => {
+                const ServiceGroup = ({ serviceName, data, isFirstGroup }: { serviceName: string; data: { read?: string[]; write?: string[] }; isFirstGroup?: boolean }) => {
                   const svcKey = `${tool.id}:${serviceName}`;
                   const isOpen = expandedServices[svcKey] ?? false;
                   const allNames = [...(data.read || []), ...(data.write || [])];
                   const svcPolicy = getGroupPolicy(allNames);
                   const count = allNames.length;
-                  // Same defensive Reddit check as the outer Card — if the
-                  // Integration lookup didn't find a match we still want
-                  // these subreddits/permission selectors to attach so
-                  // step 2's chevron + permission ops resolve.
                   const isReddit =
                     ig?.id === 'reddit' ||
                     tool.name?.toLowerCase() === 'reddit' ||
                     (tool.command || '').toLowerCase().includes('reddit');
+                  const isYoutube =
+                    ig?.id === 'youtube' ||
+                    tool.name?.toLowerCase() === 'youtube' ||
+                    (tool.command || '').toLowerCase().includes('youtube');
                   const isSubredditsForReddit =
                     isReddit && /subreddit/i.test(serviceName);
+                  // For YouTube the permission marker lands on the FIRST
+                  // service group (whatever it's called) since the YouTube
+                  // integration doesn't have a specific drill-down.
+                  const showPermissionMarker =
+                    isSubredditsForReddit || (isYoutube && isFirstGroup);
 
                   return (
                     <Box sx={{ border: `1px solid ${c.border.subtle}`, borderRadius: 1.5, overflow: 'hidden', '&:hover': { borderColor: `${c.border.medium}` } }}>
@@ -1523,7 +1534,7 @@ const Tools: React.FC = () => {
                           <Typography sx={{ color: c.text.primary, fontSize: '0.85rem', fontWeight: 600 }}>{serviceName}</Typography>
                           <Chip label={count} size="small" sx={{ bgcolor: c.bg.page, color: c.text.muted, fontSize: '0.65rem', height: 18, '& .MuiChip-label': { px: 0.6 } }} />
                         </Box>
-                        <Box data-onboarding={isSubredditsForReddit ? 'actions-permission-toggle' : undefined}>
+                        <Box data-onboarding={showPermissionMarker ? 'actions-permission-toggle' : undefined}>
                           <PermToggle value={svcPolicy === 'mixed' ? 'ask' : svcPolicy} onChange={(v) => handleGroupPermissionChange(tool.id, allNames, v)} />
                         </Box>
                       </Box>
@@ -1632,6 +1643,10 @@ const Tools: React.FC = () => {
                   ig?.id === 'reddit' ||
                   tool.name?.toLowerCase() === 'reddit' ||
                   (tool.command || '').toLowerCase().includes('reddit');
+                const isYoutube =
+                  ig?.id === 'youtube' ||
+                  tool.name?.toLowerCase() === 'youtube' ||
+                  (tool.command || '').toLowerCase().includes('youtube');
                 return (
                   <Card
                     key={tool.id}
@@ -1640,7 +1655,7 @@ const Tools: React.FC = () => {
                     <CardContent sx={{ py: 1.5, px: 2, '&:last-child': { pb: 1.5 } }}>
                       <Box
                         sx={{ display: 'flex', alignItems: 'center', gap: 2, cursor: isDisabled ? 'default' : 'pointer' }}
-                        data-onboarding={isReddit ? 'actions-reddit-chevron' : undefined}
+                        data-onboarding={isYoutube ? 'actions-youtube-chevron' : isReddit ? 'actions-reddit-chevron' : undefined}
                         onClick={() => !isDisabled && setExpandedToolId(isExpanded ? null : tool.id)}
                       >
                         {ig && (
@@ -1719,7 +1734,13 @@ const Tools: React.FC = () => {
                         )}
                         {ig && (
                           <Box
-                            data-onboarding={isReddit ? 'actions-reddit-toggle' : undefined}
+                            data-onboarding={
+                              isYoutube
+                                ? 'actions-youtube-toggle'
+                                : isReddit
+                                  ? 'actions-reddit-toggle'
+                                  : undefined
+                            }
                             sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}
                             onClick={(e) => e.stopPropagation()}
                           >
@@ -1805,8 +1826,8 @@ const Tools: React.FC = () => {
                             </Box>
                           ) : (
                             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-                              {serviceNames.map((svc) => (
-                                <ServiceGroup key={svc} serviceName={svc} data={services![svc]} />
+                              {serviceNames.map((svc, idx) => (
+                                <ServiceGroup key={svc} serviceName={svc} data={services![svc]} isFirstGroup={idx === 0} />
                               ))}
                             </Box>
                           )}
