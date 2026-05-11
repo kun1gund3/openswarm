@@ -8,7 +8,6 @@ import Tabs from '@mui/material/Tabs';
 import Tab from '@mui/material/Tab';
 import Tooltip from '@mui/material/Tooltip';
 import CircularProgress from '@mui/material/CircularProgress';
-import SaveIcon from '@mui/icons-material/Save';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import HtmlIcon from '@mui/icons-material/Code';
 import PythonIcon from '@mui/icons-material/Terminal';
@@ -22,7 +21,6 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import Collapse from '@mui/material/Collapse';
 import Chip from '@mui/material/Chip';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useAppDispatch, useAppSelector } from '@/shared/hooks';
 import { createDraftSession, removeDraftSession, fetchSession } from '@/shared/state/agentsSlice';
 import { createOutput, updateOutput, Output, executeOutput, OutputExecuteResult, SERVE_BASE } from '@/shared/state/outputsSlice';
@@ -310,14 +308,13 @@ interface Props {
   onClose: () => void;
 }
 
-const ViewEditor: React.FC<Props> = ({ output, onClose }) => {
+const ViewEditor: React.FC<Props> = ({ output }) => {
   const c = useClaudeTokens();
   const dispatch = useAppDispatch();
 
   const [createdId, setCreatedId] = useState<string | null>(null);
   const createdIdRef = useRef<string | null>(null);
   const effectiveId = output?.id ?? createdId;
-  const isNew = !effectiveId;
 
   const [name, setName] = useState(output?.name ?? '');
   const [description, setDescription] = useState(output?.description ?? '');
@@ -339,10 +336,7 @@ const ViewEditor: React.FC<Props> = ({ output, onClose }) => {
 
   const [activeTab, setActiveTab] = useState(TAB_PREVIEW);
   const [activeFile, setActiveFile] = useState('index.html');
-  const [saving, setSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'unsaved' | 'saving' | 'saved'>('idle');
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const savedStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Skip preview reloads when nothing the user can SEE changed.
   // The iframe renders index.html; if a save only touched SKILL.md or
   // other non-rendered files, there's no point reloading the iframe —
@@ -651,13 +645,11 @@ const ViewEditor: React.FC<Props> = ({ output, onClose }) => {
       .catch(() => {});
   };
 
-  const performSaveRef = useRef<((close: boolean) => Promise<void>) | null>(null);
+  const performSaveRef = useRef<(() => Promise<void>) | null>(null);
 
-  performSaveRef.current = async (close: boolean) => {
+  performSaveRef.current = async () => {
     if (savingRef.current) return;
     savingRef.current = true;
-    setSaving(true);
-    setSaveStatus('saving');
     try {
       const body = buildBody();
       const eid = output?.id ?? createdIdRef.current;
@@ -677,41 +669,27 @@ const ViewEditor: React.FC<Props> = ({ output, onClose }) => {
         onboardingBus.emit('app:generation_done');
       }
       savedRef.current = true;
-      setSaveStatus('saved');
-      if (savedStatusTimerRef.current) clearTimeout(savedStatusTimerRef.current);
-      savedStatusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 3000);
-      if (close) {
-        onClose();
-      } else {
-        // Trailing-edge debounce + content-changed gate. Only triggers
-        // a real iframe reload when the agent has gone quiet AND the
-        // file the iframe actually renders (index.html) changed since
-        // the last reload. Eliminates the "Ready" empty-state flash
-        // entirely for non-rendered file writes (SKILL.md, etc).
-        if (previewReloadTimerRef.current) {
-          clearTimeout(previewReloadTimerRef.current);
-        }
-        previewReloadTimerRef.current = setTimeout(() => {
-          previewReloadTimerRef.current = null;
-          const currentHtml = files['index.html'] ?? '';
-          if (currentHtml === lastReloadedIndexHtmlRef.current) return;
-          lastReloadedIndexHtmlRef.current = currentHtml;
-          previewRef.current?.reload();
-        }, PREVIEW_RELOAD_DEBOUNCE_MS);
+      // Trailing-edge debounce + content-changed gate. Only triggers
+      // a real iframe reload when the agent has gone quiet AND the
+      // file the iframe actually renders (index.html) changed since
+      // the last reload. Eliminates the "Ready" empty-state flash
+      // entirely for non-rendered file writes (SKILL.md, etc).
+      if (previewReloadTimerRef.current) {
+        clearTimeout(previewReloadTimerRef.current);
       }
+      previewReloadTimerRef.current = setTimeout(() => {
+        previewReloadTimerRef.current = null;
+        const currentHtml = files['index.html'] ?? '';
+        if (currentHtml === lastReloadedIndexHtmlRef.current) return;
+        lastReloadedIndexHtmlRef.current = currentHtml;
+        previewRef.current?.reload();
+      }, PREVIEW_RELOAD_DEBOUNCE_MS);
       captureThumbnailAsync(savedId);
     } catch (err: any) {
       console.error('Failed to save output:', err);
-      setSaveStatus('unsaved');
     } finally {
-      setSaving(false);
       savingRef.current = false;
     }
-  };
-
-  const handleSave = async (close = true) => {
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    await performSaveRef.current?.(close);
   };
 
   const handleRunPreview = async () => {
@@ -812,12 +790,9 @@ const ViewEditor: React.FC<Props> = ({ output, onClose }) => {
     }
     const hasContent = name.trim() || (files['index.html'] ?? '').trim();
     if (!hasContent) return;
-    if (!savingRef.current) {
-      setSaveStatus('unsaved');
-    }
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(() => {
-      performSaveRef.current?.(false);
+      performSaveRef.current?.();
     }, 1500);
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
@@ -827,7 +802,6 @@ const ViewEditor: React.FC<Props> = ({ output, onClose }) => {
   useEffect(() => {
     return () => {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-      if (savedStatusTimerRef.current) clearTimeout(savedStatusTimerRef.current);
       if (previewReloadTimerRef.current) clearTimeout(previewReloadTimerRef.current);
       wsPushTimers.current.forEach(t => clearTimeout(t));
     };
@@ -938,45 +912,6 @@ const ViewEditor: React.FC<Props> = ({ output, onClose }) => {
             }}
           />
 
-          {saveStatus === 'unsaved' && (
-            <Typography sx={{ fontSize: '0.72rem', color: c.text.ghost, fontStyle: 'italic', whiteSpace: 'nowrap' }}>
-              Unsaved changes
-            </Typography>
-          )}
-          {saveStatus === 'saving' && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              <CircularProgress size={12} sx={{ color: c.text.ghost }} />
-              <Typography sx={{ fontSize: '0.72rem', color: c.text.ghost, whiteSpace: 'nowrap' }}>
-                Saving…
-              </Typography>
-            </Box>
-          )}
-          {saveStatus === 'saved' && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              <CheckCircleOutlineIcon sx={{ fontSize: 14, color: c.accent.primary }} />
-              <Typography sx={{ fontSize: '0.72rem', color: c.accent.primary, whiteSpace: 'nowrap' }}>
-                Saved
-              </Typography>
-            </Box>
-          )}
-          <Button
-            variant="contained"
-            startIcon={<SaveIcon sx={{ fontSize: 16 }} />}
-            onClick={() => handleSave(false)}
-            disabled={saving || !name.trim()}
-            size="small"
-            data-onboarding="app-builder-submit"
-            sx={{
-              bgcolor: c.accent.primary,
-              textTransform: 'none',
-              fontWeight: 500,
-              fontSize: '0.8rem',
-              px: 2,
-              '&:hover': { bgcolor: c.accent.hover },
-            }}
-          >
-            {saving ? 'Saving…' : isNew ? 'Create' : 'Save'}
-          </Button>
         </Box>
 
         {/* Tab bar */}

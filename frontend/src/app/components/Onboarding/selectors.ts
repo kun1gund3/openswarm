@@ -71,7 +71,6 @@ export const S = {
 
   // new — apps / views page
   appsNewButton: 'apps-new-button',
-  appBuilderSubmit: 'app-builder-submit',
   appCardLatest: 'app-card-latest',
 
   // new — browser card
