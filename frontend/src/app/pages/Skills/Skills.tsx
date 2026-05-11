@@ -614,20 +614,37 @@ const Skills: React.FC = () => {
           <Box sx={{ p: 4, pb: 3, maxWidth: 1100, display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
             {/* Header row: name + actions */}
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5, flexShrink: 0 }}>
-              <Typography sx={{ fontSize: '1.4rem', fontWeight: 700, color: c.text.primary, fontFamily: c.font.sans }}>
-                {selectedLocal.name}
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography sx={{ fontSize: '1.4rem', fontWeight: 700, color: c.text.primary, fontFamily: c.font.sans }}>
+                  {selectedLocal.name}
+                </Typography>
+                {selectedLocal.built_in && (
+                  <Chip
+                    label="Built-in"
+                    size="small"
+                    sx={{
+                      bgcolor: 'rgba(174,86,48,0.12)',
+                      color: c.accent.primary,
+                      fontWeight: 600,
+                      fontSize: '0.7rem',
+                      height: 20,
+                    }}
+                  />
+                )}
+              </Box>
               <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
                 <Tooltip title="Edit">
                   <IconButton size="small" onClick={() => openEdit(selectedLocal)} sx={{ color: c.text.tertiary, '&:hover': { color: c.accent.primary } }}>
                     <EditIcon sx={{ fontSize: 18 }} />
                   </IconButton>
                 </Tooltip>
-                <Tooltip title="Delete">
-                  <IconButton size="small" onClick={() => handleDelete(selectedLocal.id)} sx={{ color: c.text.tertiary, '&:hover': { color: c.status.error } }}>
-                    <DeleteIcon sx={{ fontSize: 18 }} />
-                  </IconButton>
-                </Tooltip>
+                {!selectedLocal.built_in && (
+                  <Tooltip title="Delete">
+                    <IconButton size="small" onClick={() => handleDelete(selectedLocal.id)} sx={{ color: c.text.tertiary, '&:hover': { color: c.status.error } }}>
+                      <DeleteIcon sx={{ fontSize: 18 }} />
+                    </IconButton>
+                  </Tooltip>
+                )}
               </Box>
             </Box>
 

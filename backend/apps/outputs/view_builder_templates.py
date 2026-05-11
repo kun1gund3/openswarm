@@ -2,10 +2,38 @@
 
 import os
 
-_SKILL_PATH = os.path.join(os.path.dirname(__file__), "view_builder_skill.md")
+# Absolute path to the bundled skill source. Surfaced as a constant so the
+# skills subsystem can register it as a built-in skill (copy into
+# ~/.claude/skills/ on first boot) without re-deriving the path.
+APP_BUILDER_SKILL_SOURCE_PATH = os.path.join(os.path.dirname(__file__), "app_builder_skill.md")
 
-with open(_SKILL_PATH, encoding="utf-8") as _f:
-    VIEW_BUILDER_SKILL = _f.read()
+# Bundled default — used as the read-once fallback if the user-editable
+# copy at ~/.claude/skills/app_builder_skill.md has been removed despite
+# the built-in flag (defensive; shouldn't happen in normal use).
+with open(APP_BUILDER_SKILL_SOURCE_PATH, encoding="utf-8") as _f:
+    APP_BUILDER_SKILL_DEFAULT = _f.read()
+
+
+def load_app_builder_skill() -> str:
+    """Return the live App Builder skill content. Prefers the
+    user-editable copy at ~/.claude/skills/app_builder_skill.md (so a
+    user's edit on the Skills page takes effect on the very next App
+    Builder agent turn — no restart, no copy-on-edit dance). Falls back
+    to the bundled default if the user file is somehow gone."""
+    user_path = os.path.expanduser("~/.claude/skills/app_builder_skill.md")
+    if os.path.exists(user_path):
+        try:
+            with open(user_path, encoding="utf-8") as f:
+                return f.read()
+        except Exception:
+            pass
+    return APP_BUILDER_SKILL_DEFAULT
+
+
+# Backward-compat alias. Older callers import VIEW_BUILDER_SKILL directly —
+# point them at the same content as the user-editable version so a "frozen
+# at import" stale copy can't drift from what the skills page shows.
+VIEW_BUILDER_SKILL = APP_BUILDER_SKILL_DEFAULT
 
 VIEW_TEMPLATE_INDEX = """\
 <!DOCTYPE html>

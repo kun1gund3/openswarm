@@ -10,6 +10,12 @@ class Skill(BaseModel):
     content: str
     file_path: str = ""
     command: str = ""
+    # Skills that OpenSwarm ships as part of the platform (e.g. the App
+    # Builder reference) get this flag set. The UI hides the delete
+    # button for them and the DELETE endpoint refuses with 409. Content
+    # is still editable — the whole point is that users can tune how
+    # the platform-internal agents behave.
+    built_in: bool = False
 
 
 class SkillCreate(BaseModel):

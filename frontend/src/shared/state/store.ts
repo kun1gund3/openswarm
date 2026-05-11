@@ -13,6 +13,7 @@ import dashboardsReducer from './dashboardsSlice';
 import updateReducer from './updateSlice';
 import modelsReducer from './modelsSlice';
 import interactionReducer from './interactionSlice';
+import subscriptionsReducer from './subscriptionsSlice';
 import onboardingProgressReducer from '@/app/components/Onboarding/OnboardingProgressSlice';
 
 export const store = configureStore({
@@ -31,6 +32,7 @@ export const store = configureStore({
     update: updateReducer,
     models: modelsReducer,
     interaction: interactionReducer,
+    subscriptions: subscriptionsReducer,
     onboardingProgress: onboardingProgressReducer,
   },
   // Disable Redux Toolkit's dev-mode invariant middleware (serializable +

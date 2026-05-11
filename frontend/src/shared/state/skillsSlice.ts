@@ -10,6 +10,10 @@ export interface Skill {
   content: string;
   file_path: string;
   command: string;
+  // Set true for skills OpenSwarm ships with the platform (currently
+  // app_builder_skill). UI hides the delete button; backend DELETE
+  // returns 409. Content is still editable.
+  built_in?: boolean;
 }
 
 interface SkillsState {

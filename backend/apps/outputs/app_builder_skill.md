@@ -1,8 +1,10 @@
 # App Builder — Platform Reference
 
-You are building an **App**: a self-contained web app served in an iframe.
-The workspace you're working in is the source of truth — every file you write
-here is served directly to the live preview.
+You are building an **App**: a self-contained web app rendered inside an
+Electron `<webview>` (so it behaves like a real browser tab — cross-origin
+`fetch`, popups, mic/camera, etc. all work). The workspace you're working
+in is the source of truth — every file you write here is served directly
+to the live preview.
 
 ---
 
@@ -10,10 +12,9 @@ here is served directly to the live preview.
 
 | File | Required | Purpose |
 |------|----------|---------|
-| `index.html` | **Yes** | Entry point. Must be a complete HTML document. This is the ONLY file the preview iframe loads — never rename it. |
+| `index.html` | **Yes** | Entry point. Must be a complete HTML document. This is the ONLY file the preview loads — never rename it. |
 | `meta.json` | **Yes** | `{"name":"…","description":"…"}` — displayed in the UI header. Always write this. |
-| `schema.json` | Recommended | JSON Schema defining the input form (the "Test Input" tab). |
-| `backend.py` | Optional | Server-side Python executed before rendering. |
+| `backend.py` | Optional | Long-running HTTP server. See "Backend" below. |
 | Everything else | Optional | JS, CSS, images, subdirectories — referenced from `index.html` via relative paths. |
 
 ### ⚠️ Do NOT
@@ -21,75 +22,72 @@ here is served directly to the live preview.
 - Name the main HTML file anything other than `index.html` — the platform
   will not find it and the preview will be blank.
 - Use `document.write()` — it breaks the injected data globals.
-- Assume any external server or API is available unless the user provides one.
+- Treat `backend.py` like a one-shot helper. It's a real HTTP server (see below).
 
 ---
 
 ## Injected globals
 
-Before `index.html` loads, the platform injects two globals:
+Before `index.html` loads, the platform injects:
 
 ```javascript
-window.OUTPUT_INPUT          // Object — structured input from the schema form
-window.OUTPUT_BACKEND_RESULT // Object | null — result from backend.py execution
+window.OUTPUT_INPUT       // Object — optional structured input (may be {})
+window.OUTPUT_BACKEND_URL // string | null — base URL of the running backend.py, e.g. "http://127.0.0.1:54213"
 ```
 
-These are available immediately in any `<script>` tag. You can also listen for
-live updates when the user changes input:
-
-```javascript
-window.addEventListener('output-data-ready', () => {
-  const input = window.OUTPUT_INPUT;
-  const result = window.OUTPUT_BACKEND_RESULT;
-  // re-render with new data
-});
-```
+`OUTPUT_BACKEND_URL` is `null` when the app has no `backend.py` (pure-frontend
+app). When it's set, `fetch(window.OUTPUT_BACKEND_URL + '/your-route')` hits
+the persistent backend.
 
 ---
 
-## schema.json format
+## backend.py — persistent HTTP server
 
-Standard JSON Schema. The platform renders a form from this automatically.
+`backend.py` runs as a **long-lived subprocess** for the lifetime of the
+app being open in the editor. It is **NOT a one-shot helper** that runs
+once before render — it's a real backend server that responds to
+frontend `fetch()` calls.
 
-```json
-{
-  "type": "object",
-  "properties": {
-    "title":   { "type": "string", "default": "My Dashboard" },
-    "count":   { "type": "number", "default": 10 },
-    "enabled": { "type": "boolean", "default": true },
-    "items":   {
-      "type": "array",
-      "items": { "type": "string" },
-      "default": ["alpha", "beta"]
-    }
-  },
-  "required": ["title"]
-}
-```
+The platform auto-allocates a free port and exposes it via the env var
+`PORT`. Your `backend.py` MUST bind to that port. Any standard Python
+HTTP framework works (FastAPI, Flask, raw `http.server`).
 
-Supported types: `string`, `number`, `integer`, `boolean`, `array`, `object`.
-Use `"default"` values so the preview works without manual input.
-
----
-
-## backend.py
-
-Optional server-side Python that runs before the frontend renders.
-It receives a global `input_data` dict (the schema form values) and must
-assign its result to a global `result` dict.
+Minimal FastAPI example:
 
 ```python
-# input_data is pre-populated from the schema form
-import json
+# backend.py
+import os
+import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-result = {
-    "processed_items": [item.upper() for item in input_data.get("items", [])],
-    "timestamp": "2024-01-01T00:00:00Z",
-}
+app = FastAPI()
+# The frontend is served from http://localhost:8324 (different origin
+# than this backend on http://127.0.0.1:$PORT), so CORS must allow it.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/items")
+def list_items():
+    return {"items": ["alpha", "beta", "gamma"]}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ["PORT"]))
 ```
 
-The `result` dict becomes `window.OUTPUT_BACKEND_RESULT` in the frontend.
+Then in `index.html`:
+
+```javascript
+const res = await fetch(window.OUTPUT_BACKEND_URL + '/items');
+const data = await res.json();
+```
+
+Stdout/stderr from `backend.py` stream live into the App Builder's
+**Terminal** tab (prefixed `[BACKEND]`), so `print()` is your debugger.
 
 ---
 
@@ -102,7 +100,7 @@ workspace root, so relative imports work naturally:
 workspace/
 ├── index.html
 ├── meta.json
-├── schema.json
+├── backend.py          (optional)
 ├── styles/
 │   └── main.css
 ├── components/

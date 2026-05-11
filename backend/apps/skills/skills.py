@@ -16,16 +16,6 @@ INDEX_PATH = os.path.join(SKILLS_DIR, ".skills_index.json")
 from backend.config.paths import SKILLS_WORKSPACE_DIR
 
 
-@asynccontextmanager
-async def skills_lifespan():
-    os.makedirs(SKILLS_DIR, exist_ok=True)
-    os.makedirs(SKILLS_WORKSPACE_DIR, exist_ok=True)
-    yield
-
-
-skills = SubApp("skills", skills_lifespan)
-
-
 def _load_index() -> dict[str, dict]:
     if os.path.exists(INDEX_PATH):
         with open(INDEX_PATH) as f:
@@ -36,6 +26,85 @@ def _load_index() -> dict[str, dict]:
 def _save_index(index: dict[str, dict]):
     with open(INDEX_PATH, "w") as f:
         json.dump(index, f, indent=2)
+
+
+# Built-in skills shipped with OpenSwarm itself. Each entry describes a
+# skill file we copy into ~/.claude/skills/ on first boot and tag with
+# `built_in: true` in the index. Users can edit the content (their
+# changes flow through to the matching agent's prompt on the next turn),
+# but they can't delete the file — the DELETE endpoint refuses with 409.
+def _built_in_skill_registry() -> list[dict]:
+    # Imported lazily so this module stays cheap to import from
+    # everywhere (the skills outputs module pulls in pydantic+fastapi
+    # transitively and we don't want a cycle).
+    from backend.apps.outputs.view_builder_templates import APP_BUILDER_SKILL_SOURCE_PATH
+    return [
+        {
+            "id": "app_builder_skill",
+            "name": "App Builder",
+            "description": (
+                "Reference doc the App Builder agent reads on every turn. "
+                "Edit this to change how every App Builder agent behaves — "
+                "your edits take effect on the next turn, no restart. "
+                "Built-in: can be edited but not deleted."
+            ),
+            "command": "app-builder-skill",
+            "source_path": APP_BUILDER_SKILL_SOURCE_PATH,
+        },
+    ]
+
+
+def _seed_built_in_skills() -> None:
+    """Copy each built-in skill into SKILLS_DIR if not already present, and
+    ensure the index has the `built_in: true` flag so the UI and DELETE
+    endpoint know to treat it specially. Idempotent — safe to call on
+    every boot. Doesn't overwrite the file once it exists (so user edits
+    are preserved across restarts and upgrades)."""
+    index = _load_index()
+    dirty = False
+    for entry in _built_in_skill_registry():
+        skill_id = entry["id"]
+        fpath = os.path.join(SKILLS_DIR, f"{skill_id}.md")
+        if not os.path.exists(fpath):
+            try:
+                with open(entry["source_path"], encoding="utf-8") as src:
+                    content = src.read()
+                with open(fpath, "w", encoding="utf-8") as dst:
+                    dst.write(content)
+            except FileNotFoundError:
+                logger.warning("built-in skill source missing: %s", entry["source_path"])
+                continue
+        # Refresh index metadata. Existing user-changed name/description
+        # in the index stays, but built_in always gets re-asserted in case
+        # the index was created before this mechanism existed.
+        meta = dict(index.get(skill_id, {}))
+        meta.setdefault("name", entry["name"])
+        meta.setdefault("description", entry["description"])
+        meta.setdefault("command", entry["command"])
+        if not meta.get("built_in"):
+            meta["built_in"] = True
+            dirty = True
+        if index.get(skill_id) != meta:
+            index[skill_id] = meta
+            dirty = True
+    if dirty:
+        _save_index(index)
+
+
+@asynccontextmanager
+async def skills_lifespan():
+    os.makedirs(SKILLS_DIR, exist_ok=True)
+    os.makedirs(SKILLS_WORKSPACE_DIR, exist_ok=True)
+    try:
+        _seed_built_in_skills()
+    except Exception:
+        # Don't block app startup on a skill-seed failure — the worst
+        # case is the user has to manually paste the skill in once.
+        logger.exception("failed to seed built-in skills")
+    yield
+
+
+skills = SubApp("skills", skills_lifespan)
 
 
 def _sync_skills() -> list[Skill]:
@@ -59,6 +128,7 @@ def _sync_skills() -> list[Skill]:
                     content=content,
                     file_path=fpath,
                     command=meta.get("command", fname.replace(".md", "")),
+                    built_in=bool(meta.get("built_in", False)),
                 )
                 result.append(skill)
 
@@ -204,10 +274,19 @@ async def update_skill(skill_id: str, body: SkillUpdate):
 
 @skills.router.delete("/{skill_id}")
 async def delete_skill(skill_id: str):
+    index = _load_index()
+    if index.get(skill_id, {}).get("built_in"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"'{skill_id}' is a built-in skill and can't be deleted "
+                "(edit its content instead — your edits take effect on "
+                "the next agent turn)."
+            ),
+        )
     fpath = os.path.join(SKILLS_DIR, f"{skill_id}.md")
     if os.path.exists(fpath):
         os.remove(fpath)
-    index = _load_index()
     index.pop(skill_id, None)
     _save_index(index)
     return {"ok": True}

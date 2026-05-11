@@ -46,6 +46,11 @@ import { onboardingBus } from '@/app/components/Onboarding/eventBus';
 import { resetTour } from '@/app/components/Onboarding/OnboardingProgressSlice';
 import { OPENSWARM_DEFAULT_PROXY_URL } from '@/shared/config';
 import { fetchModels } from '@/shared/state/modelsSlice';
+import {
+  fetchSubscriptionStatus,
+  setSubscriptionStatus,
+  selectSubscriptionConnections,
+} from '@/shared/state/subscriptionsSlice';
 import { setChecking, setUpdateError, setInstalling } from '@/shared/state/updateSlice';
 import { fetchModes } from '@/shared/state/modesSlice';
 import { useClaudeTokens, useThemeMode } from '@/shared/styles/ThemeContext';
@@ -601,31 +606,28 @@ const OpenSwarmProCard: React.FC = () => {
 const SubscriptionCards: React.FC = () => {
   const c = useClaudeTokens();
   const dispatch = useAppDispatch();
-  const [status, setStatus] = useState<any>(null);
+  // `status` and the polymorphic-shape `connections` array now live in the
+  // subscriptionsSlice. The onboarding gate (hasModelConnected in
+  // skipPredicates.ts) reads the same slice, so OAuth-driven connections
+  // unstick step 1 the moment they land — previously this card kept the
+  // status in local useState, which the onboarding predicate could never
+  // observe.
+  const status = useAppSelector((s) => s.subscriptions.status);
+  const connections = useAppSelector(selectSubscriptionConnections);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const [userCode, setUserCode] = useState('');
   const [pollTimer, setPollTimer] = useState<any>(null);
 
-  // `preserveTransient` keeps a previously-seen `running: true` state when a
-  // refresh comes back with `running: false`. The backend's is_running() probe
-  // has a short sync timeout that can be exceeded while 9Router is streaming
-  // inference, producing false negatives that would otherwise flip these
-  // cards into a "Starting subscription service..." spinner mid-session.
-  const fetchStatus = useCallback(async (opts?: { preserveTransient?: boolean }) => {
-    try {
-      const r = await fetch(`${API_BASE}/agents/subscriptions/status`);
-      const data = await r.json();
-      setStatus((prev: any) => {
-        if (opts?.preserveTransient && prev?.running && !data?.running) return prev;
-        return data;
-      });
-      return data;
-    } catch {
-      setStatus((prev: any) => prev ?? { running: false, providers: [], models: [] });
-      return null;
-    }
-  }, []);
+  // Thin wrapper around the slice thunk — returns the resolved status so
+  // call sites that inspect the payload (e.g. the initial-load retry loop
+  // checking `data?.running`) keep working unchanged.
+  const fetchStatus = useCallback(
+    async (opts?: { preserveTransient?: boolean }) => {
+      return dispatch(fetchSubscriptionStatus(opts)).unwrap();
+    },
+    [dispatch],
+  );
 
   // Refresh the chat model picker whenever subscription connection state
   // changes — GET /agents/models intersects BUILTIN_MODELS with 9Router's
@@ -650,11 +652,11 @@ const SubscriptionCards: React.FC = () => {
     return () => { cancelled = true; clearInterval(interval); };
   }, [fetchStatus]);
 
-  const isConnected = (providerId: string) => {
-    if (!status?.providers) return false;
-    const connections = status.providers?.connections || (Array.isArray(status.providers) ? status.providers : []);
-    return connections.some((p: any) => p.provider === providerId && (p.isActive || p.testStatus === 'active'));
-  };
+  const isConnected = (providerId: string) =>
+    connections.some(
+      (p: any) =>
+        p.provider === providerId && (p.isActive || p.testStatus === 'active'),
+    );
 
   const handleConnect = async (providerId: string) => {
     // Cancel any previous attempt first
@@ -961,7 +963,7 @@ const SubscriptionCards: React.FC = () => {
         if (cancelled) return;
         const conns = d?.providers?.connections || [];
         if (conns.some((p: any) => p.provider === connecting && (p.isActive || p.testStatus === 'active'))) {
-          setStatus(d);
+          dispatch(setSubscriptionStatus(d));
           setConnecting(null);
           setUserCode('');
           refreshPickerModels();

@@ -4,17 +4,37 @@
 // user already did the thing.
 
 import type { RootState } from '@/shared/state/store';
+import {
+  hasAnyActiveSubscription,
+} from '@/shared/state/subscriptionsSlice';
 
 export function hasModelConnected(s: RootState): boolean {
   const d = s.settings.data as any;
   if (!d) return false;
+  // Path 1: OpenSwarm Pro cloud bearer.
   if (d.connection_mode === 'openswarm-pro' && d.openswarm_bearer_token) return true;
-  return Boolean(
+  // Path 2: first-party API keys typed into Settings → Models.
+  if (
     d.anthropic_api_key ||
-      d.openai_api_key ||
-      d.google_api_key ||
-      d.openrouter_api_key,
-  );
+    d.openai_api_key ||
+    d.google_api_key ||
+    d.openrouter_api_key
+  ) {
+    return true;
+  }
+  // Path 3: custom OpenAI-compatible providers (LM Studio, Ollama, etc.).
+  // Match the validity rule the Settings page uses to render the provider
+  // row: name + base_url present. The api_key field is intentionally
+  // optional — local OpenAI-compatible servers don't require one.
+  const customs = (d.custom_providers || []) as any[];
+  if (customs.some((cp) => cp?.name?.trim() && cp?.base_url?.trim())) {
+    return true;
+  }
+  // Path 4: external OAuth subscriptions (Claude Max, ChatGPT, etc.). The
+  // tokens live in 9Router-managed storage and are surfaced to the frontend
+  // only via the subscriptionsSlice mirror of /agents/subscriptions/status.
+  if (hasAnyActiveSubscription(s)) return true;
+  return false;
 }
 
 export function hasAnyToolEnabled(s: RootState): boolean {

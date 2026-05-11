@@ -1482,8 +1482,14 @@ class AgentManager:
             )
 
             if session.mode == "view-builder":
-                from backend.apps.outputs.view_builder_templates import VIEW_BUILDER_SKILL
-                skill_block = f"<app_builder_reference>\n{VIEW_BUILDER_SKILL}\n</app_builder_reference>"
+                # Read the LIVE skill content rather than a frozen-at-import
+                # constant. The skill is registered as a built-in skill at
+                # ~/.claude/skills/app_builder_skill.md (see
+                # backend/apps/skills/skills.py); user edits in the Skills
+                # page land there and propagate to the agent's prompt on
+                # the next turn without a restart.
+                from backend.apps.outputs.view_builder_templates import load_app_builder_skill
+                skill_block = f"<app_builder_reference>\n{load_app_builder_skill()}\n</app_builder_reference>"
                 composed_prompt = f"{composed_prompt}\n\n{skill_block}" if composed_prompt else skill_block
 
             # Per-turn estimate of framework overhead (subtracted from displayed

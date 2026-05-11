@@ -16,7 +16,7 @@ from backend.apps.outputs.models import (
     VibeCodeRequest, WorkspaceSeedRequest,
 )
 from backend.apps.outputs.executor import execute_backend_code
-from backend.apps.outputs.view_builder_templates import VIEW_BUILDER_SKILL, VIEW_TEMPLATE_FILES
+from backend.apps.outputs.view_builder_templates import VIEW_TEMPLATE_FILES, load_app_builder_skill
 from backend.apps.settings.settings import load_settings
 
 logger = logging.getLogger(__name__)
@@ -329,8 +329,14 @@ async def seed_workspace(body: WorkspaceSeedRequest):
             with open(full_path, "w") as f:
                 f.write(content)
 
+    # Seed the workspace's SKILL.md with the LIVE skill content so an
+    # agent that Reads SKILL.md sees the same text the Skills page shows.
+    # Snapshot at workspace creation; subsequent edits don't rewrite
+    # already-seeded workspaces (the system-prompt injection in
+    # agent_manager reads live, so the agent always has the latest
+    # rules regardless of this on-disk copy).
     with open(os.path.join(folder, "SKILL.md"), "w") as f:
-        f.write(VIEW_BUILDER_SKILL)
+        f.write(load_app_builder_skill())
 
     if body.meta:
         with open(os.path.join(folder, "meta.json"), "w") as f:
