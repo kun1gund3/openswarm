@@ -23,24 +23,26 @@ export const step08: OnboardingStep = {
       condition: { kind: 'click_target', target: S.appsNewButton },
     },
     // After clicking +, the /apps/new route mounts ViewEditor which
-    // asynchronously renders AgentChat in the left pane (model probe
-    // + initial fetch). Without this delay AC tries to type into an
-    // input that's either not yet mounted or mounted-but-not-wired
-    // to the App Builder agent's state machine. Characters land in
-    // the DOM but get discarded on first render commit.
-    //
-    // 1500ms covers the typical mount + model probe round-trip even
-    // under main-thread starvation from concurrent agent streams.
-    // waitForSelector below ALSO retries on its own, so this is a
-    // belt-and-suspenders preflight, not the primary wait.
+    // asynchronously renders AgentChat in the left pane (model probe +
+    // initial fetch). The chat-input data-onboarding marker can land
+    // on a DIFFERENT agent's chat (one of the dashboard cards) before
+    // the App Builder's own scope mounts, so we wait for the scoped
+    // marker specifically. wait_for_dom polls every 100ms up to 8s —
+    // instant on warm starts, patient on cold ones. Replaces the prior
+    // fixed 1500ms delay that under-fit slow boots and added latency
+    // on fast ones.
     {
       kind: 'popup',
       text: 'Loading the App Builder...',
     },
-    { kind: 'delay', ms: 1500 },
-    // The App Builder chat lives in the left pane on /apps/new — a
-    // regular ChatInput instance, so data-onboarding="chat-input"
-    // resolves to it.
+    {
+      kind: 'wait_for_dom',
+      css: '[data-onboarding-scope="app-builder"] [data-onboarding="chat-input"]',
+      timeoutMs: 8000,
+    },
+    // The App Builder chat lives in the left pane on /apps/new — the
+    // chat-input selector resolves to it via the App Builder scope
+    // priority in resolveSelector.
     { kind: 'move_to', target: S.chatInput },
     {
       kind: 'type_into',

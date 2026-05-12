@@ -10,13 +10,17 @@ export const step06: OnboardingStep = {
   videoSrc: './onboarding-videos/v2/06.mp4',
   videoDurationLabel: '0:34',
   requiresDashboard: true,
+  // Reuses the chat the user launched back in step 3 (the YouTube /
+  // web-research agent) as the "previous chat." Step 5's
+  // dependsOn-walk pattern would be appropriate here too, but
+  // pragmatically: by step 6 the user has already created at least one
+  // chat (step 3 marks itself done on chat:message_sent), so we just
+  // frame the existing chat as the helper instead of seeding a stub
+  // via seed-orchestration-demo.
   ops: [
-    // The OnboardingRoot pre-runs `seed-orchestration-demo` before a step-6
-    // start so a stub "research" agent already exists on the canvas. The
-    // popup below tells the user to imagine they made it themselves.
     {
       kind: 'popup',
-      text: "Pretend this chat already did the homework. Now we'll have a fresh one boss it around.",
+      text: "Remember the chat you just made? We'll have a fresh one boss it around.",
     },
     { kind: 'move_to', target: S.newAgentButton },
     { kind: 'popup', text: "Make a new chat. This one's the boss." },
@@ -34,15 +38,15 @@ export const step06: OnboardingStep = {
     },
     // Same auto-fit as step 5: the new orchestrator chat triggers
     // Dashboard's autoFocusSessionId, which often pushes the older
-    // research card off-screen. Click fit-to-view first so both cards
-    // are visible together for the drag-select demo.
+    // chat off-screen. Click fit-to-view first so both cards are
+    // visible together for the drag-select demo.
     { kind: 'move_to', target: S.canvasFitToView },
     { kind: 'click', target: S.canvasFitToView, simulate: true },
     { kind: 'delay', ms: 350 },
     { kind: 'drag_select', target: 'agent-card' },
     {
       kind: 'popup',
-      text: 'Now you try! Drag a box around the chat to make it a helper.',
+      text: 'Now you try! Drag a box around the older chat to make it a helper.',
     },
     {
       kind: 'wait_user',
@@ -55,7 +59,10 @@ export const step06: OnboardingStep = {
     {
       kind: 'type_into',
       target: S.chatInput,
-      text: 'Create a pdf report of the research and save it to my downloads',
+      // Phrased to work against EITHER prompt step 3 sent — the
+      // YouTube summary OR the web-research fallback. "What it dug
+      // up" covers both without naming the source.
+      text: 'Turn what it dug up into a PDF report and save it to my downloads.',
       speedMs: 12,
     },
     { kind: 'move_to', target: S.chatSendButton },

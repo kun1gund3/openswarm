@@ -5,6 +5,7 @@ import logging
 import mimetypes
 import base64
 from datetime import datetime
+from typing import Optional
 from contextlib import asynccontextmanager
 from fastapi import HTTPException, Query
 from fastapi.responses import Response
@@ -217,16 +218,73 @@ def load_output(output_id: str) -> Output | None:
         return Output(**json.load(f))
 
 
+# Build/install/cache directories that the polling endpoint must never
+# descend into. Without this skip-list the workspace endpoint reads
+# `node_modules/` (300 MB of MUI source, when it's a real dir and not a
+# symlink), `.venv/` (10k+ Python files from the hardlinked cache),
+# `__pycache__/`, `dist/`, `.git/`, etc — every 2 seconds while the
+# agent is active. Result: backend CPU pegged on JSON-serializing
+# auto-generated chunks the frontend will then throw away. The frontend
+# already filters these for display; this skip is the real fix.
+_WALK_SKIP_DIRS = frozenset({
+    "node_modules",
+    ".vite",
+    ".vite-cache",
+    ".vite_cache",
+    ".git",
+    "dist",
+    ".next",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+})
+
+# Cap per-file response size at 256 KB. Hand-written source rarely
+# exceeds this; auto-generated bundles routinely run into the MBs and
+# they're not what the user/agent is editing. Anything over the cap
+# returns a truncated stub the frontend treats as "open the file
+# directly to see full contents."
+_WALK_MAX_FILE_BYTES = 256 * 1024
+
+
 def _walk_directory(folder: str) -> dict[str, str]:
-    """Walk a directory tree and return {relative_path: content} for all text files."""
+    """Walk a directory tree and return {relative_path: content} for all
+    text files the user is actually authoring. Skips build/install
+    directories AND truncates oversize files — both critical for the
+    polling endpoint, which is called every 2 s while the agent is
+    writing code and would otherwise serialize hundreds of MB per poll."""
     files: dict[str, str] = {}
     if not os.path.isdir(folder):
         return files
-    for root, _dirs, filenames in os.walk(folder):
+    for root, dirs, filenames in os.walk(folder):
+        # Mutate `dirs` in place — that's how os.walk skips a subtree.
+        # Doing it here means we never even stat the children, so a
+        # 10k-file `.venv/` costs ~one stat (on the dir itself) instead
+        # of 10k.
+        dirs[:] = [d for d in dirs if d not in _WALK_SKIP_DIRS]
         for fname in filenames:
             full_path = os.path.join(root, fname)
-            rel_path = os.path.relpath(full_path, folder)
+            # Normalize to forward-slash keys so the frontend's
+            # `path.split('/')` and `.startsWith(prefix)` checks work
+            # the same on Windows (where os.sep is '\\') as on macOS.
+            # Without this, every workspace file came back as
+            # `backend\\app.py` on Windows and the file tree silently
+            # mis-parsed.
+            rel_path = os.path.relpath(full_path, folder).replace(os.sep, "/")
             try:
+                # Stat first — cheap, lets us skip giant files without
+                # opening + reading them.
+                size = os.path.getsize(full_path)
+                if size > _WALK_MAX_FILE_BYTES:
+                    files[rel_path] = (
+                        f"// [openswarm] file truncated ({size} bytes > "
+                        f"{_WALK_MAX_FILE_BYTES} byte cap). Open directly "
+                        f"to view full contents."
+                    )
+                    continue
                 with open(full_path) as f:
                     files[rel_path] = f.read()
             except Exception:
@@ -347,19 +405,66 @@ async def seed_workspace(body: WorkspaceSeedRequest):
         effective_mode = "flat"
 
     if effective_mode == "webapp_template":
-        # Defer to the helper — copytree, env scaffolding, install paths.
-        from backend.apps.outputs.runtime import _find_free_port
-        frontend_port = _find_free_port()
-        seed_webapp_template_workspace(folder, frontend_port)
-        # SKILL.md still goes in workspace root — agent reads it for
-        # context. Live content (user-editable via Skills page) is
-        # injected into the system prompt regardless.
-        with open(os.path.join(folder, "SKILL.md"), "w") as f:
-            f.write(load_app_builder_skill())
-        if body.meta:
+        # Idempotency guard: re-seeding an existing webapp_template
+        # workspace would clobber the agent's edits (the helper uses
+        # dirs_exist_ok=True + copytree). If `run.sh` already exists,
+        # the workspace was seeded on a previous visit — skip the file
+        # copy and only re-derive the frontend port from .env.
+        from backend.apps.outputs.runtime import _find_free_port, _read_env_value
+        already_seeded = os.path.exists(os.path.join(folder, "run.sh"))
+        if already_seeded:
+            fp_raw = _read_env_value(os.path.join(folder, ".env"), "FRONTEND_PORT")
+            try:
+                frontend_port = int(fp_raw) if fp_raw else _find_free_port()
+            except (TypeError, ValueError):
+                frontend_port = _find_free_port()
+        else:
+            frontend_port = _find_free_port()
+            seed_webapp_template_workspace(folder, frontend_port)
+            # SKILL.md still goes in workspace root — agent reads it for
+            # context. Live content (user-editable via Skills page) is
+            # injected into the system prompt regardless.
+            with open(os.path.join(folder, "SKILL.md"), "w") as f:
+                f.write(load_app_builder_skill())
+        meta = body.meta or {}
+        if body.meta and not already_seeded:
             with open(os.path.join(folder, "meta.json"), "w") as f:
                 json.dump(body.meta, f, indent=2)
-        return {"path": os.path.abspath(folder), "template_mode": "webapp_template", "frontend_port": frontend_port}
+        # Create (or look up) the Output record so the app appears in
+        # the Apps sidebar the moment the user kicks off generation.
+        # Previously the record only landed when the editor's autosave
+        # fired, which itself was gated on `files['index.html']` being
+        # non-empty (a flat-template invariant) — meaning React+Vite
+        # apps that navigated-away mid-build had no way back. The record
+        # is a thin pointer (name + workspace_id); the workspace itself
+        # remains the source of truth for the code.
+        output_id: Optional[str] = None
+        try:
+            existing = [o for o in _load_all() if o.workspace_id == body.workspace_id]
+            if existing:
+                output_id = existing[0].id
+            else:
+                now = datetime.now().isoformat()
+                output = Output(
+                    name=str(meta.get("name") or "Untitled App"),
+                    description=str(meta.get("description") or ""),
+                    icon="view_quilt",
+                    files={},
+                    workspace_id=body.workspace_id,
+                    created_at=now,
+                    updated_at=now,
+                )
+                _save(output)
+                output_id = output.id
+        except Exception:
+            logger.exception("seed-time Output create failed for %s", body.workspace_id)
+        return {
+            "path": os.path.abspath(folder),
+            "template_mode": "webapp_template",
+            "frontend_port": frontend_port,
+            "output_id": output_id,
+            "already_seeded": already_seeded,
+        }
 
     # Legacy flat path — unchanged.
     if body.files:

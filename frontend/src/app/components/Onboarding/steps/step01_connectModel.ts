@@ -33,33 +33,24 @@ export const step01: OnboardingStep = {
           id: 'pro',
           label: 'Open Swarm Pro subscription',
           thenOps: [
-            {
-              kind: 'highlight_section',
-              target: S.settingsProSection,
-              popup: 'Pick a tier you like.',
-            },
+            { kind: 'move_to', target: S.settingsProSection },
+            { kind: 'popup', text: 'Pick a tier you like.' },
           ],
         },
         {
           id: 'subscription',
           label: 'I already have an AI subscription',
           thenOps: [
-            {
-              kind: 'highlight_section',
-              target: S.settingsExternalSubs,
-              popup: 'Hook up your subscription here.',
-            },
+            { kind: 'move_to', target: S.settingsExternalSubs },
+            { kind: 'popup', text: 'Hook up your subscription here.' },
           ],
         },
         {
           id: 'api_key',
           label: 'I have an API key',
           thenOps: [
-            {
-              kind: 'highlight_section',
-              target: S.settingsApiKeys,
-              popup: 'Drop your API key in.',
-            },
+            { kind: 'move_to', target: S.settingsApiKeys },
+            { kind: 'popup', text: 'Drop your API key in.' },
           ],
         },
       ],

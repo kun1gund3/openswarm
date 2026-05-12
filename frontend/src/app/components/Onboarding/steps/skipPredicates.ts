@@ -71,3 +71,27 @@ export function hasAnySkillInstalled(s: RootState): boolean {
   if (Array.isArray(items)) return items.length > 0;
   return Object.keys(items).length > 0;
 }
+
+// True if the PDF-handling skill is installed. Used by step 7 in place
+// of hasAnySkillInstalled so installing any *other* skill doesn't
+// auto-skip the PDF-specific install demo. Matches on id OR name OR
+// command containing 'pdf' (case-insensitive) — the skill might land
+// under any of those depending on how the user installed it.
+export function hasPdfSkillInstalled(s: RootState): boolean {
+  const items = s.skills?.items as any;
+  const list: any[] = Array.isArray(items) ? items : Object.values(items ?? {});
+  return list.some((sk: any) => {
+    const id = (sk?.id ?? '').toString().toLowerCase();
+    const name = (sk?.name ?? '').toString().toLowerCase();
+    const cmd = (sk?.command ?? '').toString().toLowerCase();
+    return id.includes('pdf') || name.includes('pdf') || cmd.includes('pdf');
+  });
+}
+
+// True if any browser card exists on the canvas. Used by step 4 to
+// auto-skip the "open a browser" walkthrough for users who already
+// have one parked on their dashboard.
+export function hasAnyBrowserSpawned(s: RootState): boolean {
+  const cards = (s as any).dashboardLayout?.browserCards ?? {};
+  return Object.keys(cards).length > 0;
+}

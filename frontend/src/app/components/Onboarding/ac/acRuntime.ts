@@ -151,7 +151,19 @@ export async function runStep(args: RunStepArgs): Promise<void> {
         if (!depStep) continue;
         if (dep.reopen === 'walk_again') {
           report('dependency_walk', { step_id: step.id, dep_id: dep.stepId });
-          await runOps(depStep.ops, { ...ctx, silent: true, stepId: depStep.id });
+          // Brief framing popup so the user knows why the cursor is
+          // about to walk them through a previous step's flow (e.g.
+          // step 5 asking step 4 to re-open a browser because they
+          // closed the one they spawned originally).
+          ac.showPopup('Quick setup before we continue.');
+          ctx.popupShownAt.current = performance.now();
+          await sleep(700);
+          // Non-silent walk: show popups so the user understands what
+          // each move_to is asking. Previously silent=true meant the
+          // cursor wandered through the dep's ops with no labels —
+          // robust but confusing. Telemetry isn't bumped for op-level
+          // events to avoid double-counting (silent kept for that).
+          await runOps(depStep.ops, { ...ctx, silent: false, stepId: depStep.id });
         }
       }
     }
@@ -498,7 +510,12 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
       const r = el.getBoundingClientRect();
       await ac.moveTo(Math.min(r.right - 14, r.left + r.width / 2), r.top + r.height / 2);
       ac.startTracking(op.target, { x: 0, y: 0 });
-      await typeInto(el, op.text, { speedMs: op.speedMs });
+      // Resolve text — string-or-function. Function form lets a step
+      // pick its prompt at run-time based on current Redux state (e.g.
+      // step 3's YouTube vs. web-research fallback).
+      const resolvedText =
+        typeof op.text === 'function' ? op.text(ctx.store.getState()) : op.text;
+      await typeInto(el, resolvedText, { speedMs: op.speedMs });
       // Anti-revert guard: some controlled contentEditable libraries
       // re-render on their own schedule and wipe AC's typed text in
       // the next React commit. Re-check the input value after a brief
@@ -512,7 +529,7 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
           return (e.value ?? '').trim();
         return (e.textContent ?? '').trim();
       };
-      const target = op.text.trim();
+      const target = resolvedText.trim();
       if (target && readText(el).length < Math.floor(target.length * 0.8)) {
         // Single-shot re-insert. Same path the typewriter's own
         // fallback uses for under-load typing drops.
@@ -527,13 +544,13 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
           }
           try {
             document.execCommand('delete', false);
-            const ok = document.execCommand('insertText', false, op.text);
+            const ok = document.execCommand('insertText', false, resolvedText);
             if (!ok) {
-              el.textContent = op.text;
+              el.textContent = resolvedText;
               el.dispatchEvent(new Event('input', { bubbles: true }));
             }
           } catch {
-            el.textContent = op.text;
+            el.textContent = resolvedText;
             el.dispatchEvent(new Event('input', { bubbles: true }));
           }
         }
@@ -649,7 +666,39 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
       return;
     }
     case 'wait_user': {
-      await waitForCondition(op.condition, signal, store, op.timeoutMs);
+      const first = await waitForCondition(
+        op.condition,
+        signal,
+        store,
+        op.timeoutMs,
+      );
+      // Retry-on-timeout for event_bus waits only: those fire on real
+      // user actions (browser:spawned, skill:installed, chat:message_sent,
+      // agent:attached_to_browser) — if the event never arrived the
+      // step's actual goal didn't happen, so silently marking the step
+      // done would let the user proceed against a half-broken state.
+      // One retry with a "didn't seem to go through" popup gives the
+      // user a clear chance to redo the action; if it times out a
+      // second time, we soft-succeed (same as before) so the step
+      // doesn't strand them forever.
+      //
+      // click_target + redux_predicate timeouts keep the original
+      // soft-success policy: the user might legitimately have done
+      // the underlying thing without our listener catching it.
+      if (first.timedOut && op.condition.kind === 'event_bus') {
+        report('wait_user_retry_prompted', {
+          step_id: ctx.stepId,
+          event: op.condition.event,
+        });
+        ac.showPopup("Didn't seem to go through — try again?");
+        ctx.popupShownAt.current = performance.now();
+        await waitForCondition(
+          op.condition,
+          signal,
+          store,
+          op.timeoutMs,
+        );
+      }
       ac.hidePopup();
       // The user just did the thing — they don't need a dwell floor on
       // top of having engaged with the popup. Clearing popupShownAt
@@ -679,6 +728,23 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
         };
         signal.addEventListener('abort', onAbort);
       });
+      return;
+    }
+    case 'wait_for_dom': {
+      const timeoutMs = op.timeoutMs ?? 8000;
+      const POLL_MS = 100;
+      const startedAt = performance.now();
+      while (performance.now() - startedAt < timeoutMs) {
+        if (signal.aborted) {
+          throw new DOMException('aborted', 'AbortError');
+        }
+        if (document.querySelector(op.css)) return;
+        await sleep(POLL_MS);
+      }
+      // Soft-success on timeout — same policy as wait_user's event_bus
+      // path. The next op (usually move_to / type_into) will hit its own
+      // waitForSelector and surface a clearer error if the target is
+      // genuinely missing.
       return;
     }
     case 'outro': {
@@ -875,12 +941,16 @@ function maybeBuildExpandCustomizationOps(target: string): ACOp[] | null {
   ];
 }
 
+interface WaitResult {
+  timedOut: boolean;
+}
+
 function waitForCondition(
   cond: AdvanceCondition,
   signal: AbortSignal,
   store: Store<RootState>,
   timeoutMs?: number,
-): Promise<void> {
+): Promise<WaitResult> {
   if (signal.aborted) {
     return Promise.reject(new DOMException('aborted', 'AbortError'));
   }
@@ -889,11 +959,11 @@ function waitForCondition(
     let cleanup: () => void = () => {};
     let timer: number | null = null;
 
-    const finish = () => {
+    const finish = (timedOut: boolean) => {
       cleanup();
       if (timer !== null) window.clearTimeout(timer);
       signal.removeEventListener('abort', onAbort);
-      resolve();
+      resolve({ timedOut });
     };
 
     const onAbort = () => {
@@ -905,12 +975,10 @@ function waitForCondition(
 
     if (timeoutMs && timeoutMs > 0) {
       timer = window.setTimeout(() => {
-        cleanup();
-        signal.removeEventListener('abort', onAbort);
-        // Treat timeout as soft-success — the user may have done the thing
-        // without our condition firing (e.g. they opened the page some other
-        // way). Better than freezing the panel.
-        resolve();
+        // Surface the timeout to the caller so wait_user can decide
+        // whether to soft-succeed (the previous policy) or prompt the
+        // user to retry (the event_bus path — see wait_user handler).
+        finish(true);
       }, timeoutMs);
     }
 
@@ -923,7 +991,7 @@ function waitForCondition(
               `[data-onboarding="${cond.target}"], [data-select-type="${cond.target}"]`,
             )
           ) {
-            finish();
+            finish(false);
           }
         };
         document.addEventListener('click', handler, true);
@@ -939,7 +1007,7 @@ function waitForCondition(
               : cond.truthy
                 ? Boolean(value)
                 : Boolean(value);
-          if (ok) finish();
+          if (ok) finish(false);
         };
         check();
         const unsub = store.subscribe(check);
@@ -948,7 +1016,7 @@ function waitForCondition(
       }
       case 'event_bus': {
         const off = onboardingBus.once(cond.event as OnboardingEvent, () =>
-          finish(),
+          finish(false),
         );
         cleanup = off;
         return;

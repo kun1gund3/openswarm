@@ -82,6 +82,19 @@ for d in \
     fi
 done
 
-python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8324 --reload \
-    --reload-dir "$BACKEND_DIR_ABSPATH" \
-    "${UVICORN_EXCLUDE_ARGS[@]}"
+# --reload is purely a dev-loop convenience — auto-restart on source
+# edits. Useless for end users running the packaged DMG (no source to
+# edit) and actively harmful: WatchFiles uses real fs handles, the
+# reload supervisor adds a couple hundred MB of resident memory, and
+# every reload tears down running agent WebSockets. Only enable it
+# when the top-level run.sh has set OPENSWARM_DEV=1 (which the dev
+# launcher does). Packaged builds leave it unset → fast, lean,
+# single-process uvicorn.
+if [[ "${OPENSWARM_DEV:-}" == "1" ]]; then
+    echo "OPENSWARM_DEV=1 detected — running uvicorn with --reload."
+    python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8324 --reload \
+        --reload-dir "$BACKEND_DIR_ABSPATH" \
+        "${UVICORN_EXCLUDE_ARGS[@]}"
+else
+    python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8324
+fi

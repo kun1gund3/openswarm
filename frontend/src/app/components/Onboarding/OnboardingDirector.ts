@@ -18,7 +18,6 @@ import { runStep } from './ac/acRuntime';
 import type { AgenticCursorHandle } from './ac/AgenticCursor';
 import type { OnboardingStep } from './steps/types';
 import { STEPS, findStepById } from './steps';
-import { API_BASE } from '@/shared/config';
 import { report } from './telemetry';
 
 interface AttachArgs {
@@ -115,28 +114,6 @@ class OnboardingDirector {
     window.addEventListener('hashchange', onRouteChange);
 
     try {
-      // Fire the pre-step hook in the BACKGROUND instead of awaiting it.
-      // For step 6, the hook posts `seed-orchestration-demo` which can
-      // take 15-30s when Anthropic is rate-limiting (the meta-generation
-      // it triggers internally hits 429s and retries). Awaiting it
-      // blocked the entire AC flow — user sees no cursor, no popup,
-      // appears completely frozen.
-      //
-      // Now: hook fires in parallel with AC's intro animation + first
-      // popup + user clicks. By the time AC reaches the drag_select op
-      // that actually needs the stub agent (several user interactions
-      // in), the seed has long since completed. If the seed fails
-      // outright, drag_select's waitForSelector will time out into the
-      // normal recovery path — same as any other "target not found"
-      // case. Never blocks the user-visible startup.
-      this.runPreStepHook(step).catch((err) => {
-        console.warn('[onboarding] preStepHook failed', step.id, err);
-        report('pre_step_hook_failed', {
-          step_id: step.id,
-          error: String(err),
-        });
-      });
-
       await runStep({
         step,
         spawnPoint,
@@ -156,60 +133,10 @@ class OnboardingDirector {
     }
   }
 
-  private async runPreStepHook(step: OnboardingStep): Promise<void> {
-    if (!this.store) return;
-
-    if (step.id === 'agent_control_agents') {
-      await this.ensureStubResearchAgent();
-    }
-  }
-
-  /**
-   * Step 6 needs a pre-existing "research" agent on the canvas so the
-   * spec's "say you already have an agent that did some work for you"
-   * narrative makes sense. We look for any existing session named
-   * "OpenSwarm research" (the seed endpoint uses that name) and only
-   * call seed-orchestration-demo when nothing matches — so re-running
-   * step 6 doesn't keep adding stub agents.
-   *
-   * In-flight dedup: rapid Show me clicks used to fire N parallel
-   * seed calls because Redux state didn't update until the FIRST one
-   * completed (and synced back via websocket). The promise cache
-   * collapses concurrent callers to a single backend POST.
-   */
-  private seedInFlight: Promise<void> | null = null;
-
-  private async ensureStubResearchAgent(): Promise<void> {
-    if (this.seedInFlight) return this.seedInFlight;
-
-    const state = this.store!.getState();
-    const sessions = (state as any).agents?.sessions ?? {};
-    const alreadySeeded = Object.values(sessions).some(
-      (s: any) => s?.name === 'OpenSwarm research',
-    );
-    if (alreadySeeded) return;
-
-    const dashboardId =
-      (state as any).tempState?.lastDashboardId ??
-      Object.keys((state as any).dashboards?.items ?? {})[0] ??
-      null;
-    if (!dashboardId) return;
-
-    this.seedInFlight = (async () => {
-      try {
-        await fetch(
-          `${API_BASE}/dashboards/${dashboardId}/seed-orchestration-demo`,
-          { method: 'POST' },
-        );
-        report('stub_research_agent_seeded', { step_id: 'agent_control_agents' });
-      } catch (err) {
-        console.warn('[onboarding] seed-orchestration-demo failed', err);
-      } finally {
-        this.seedInFlight = null;
-      }
-    })();
-    return this.seedInFlight;
-  }
+  // Step 6 previously triggered seed-orchestration-demo here to drop a
+  // stub "research" agent on the canvas. We removed it — step 6 now
+  // reuses the real chat the user created in step 3 as the "previous
+  // chat" the orchestrator bosses around, so no stub is needed.
 }
 
 export const onboardingDirector = new OnboardingDirector();

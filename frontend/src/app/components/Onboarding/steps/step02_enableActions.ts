@@ -1,6 +1,6 @@
 import type { OnboardingStep } from './types';
 import { S } from '../selectors';
-import { hasAnyToolEnabled, isYoutubeEnabled } from './skipPredicates';
+import { isYoutubeEnabled } from './skipPredicates';
 
 export const step02: OnboardingStep = {
   id: 'enable_actions',
@@ -10,7 +10,11 @@ export const step02: OnboardingStep = {
   description: 'Allow agents to work across your apps.',
   videoSrc: './onboarding-videos/v2/02.mp4',
   videoDurationLabel: '0:24',
-  skipIf: hasAnyToolEnabled,
+  // Narrowed from hasAnyToolEnabled → isYoutubeEnabled so users with
+  // an unrelated tool already on (e.g. Slack, Reddit) still get walked
+  // through enabling YouTube — step 3's hardcoded YouTube-summary
+  // prompt would otherwise hit a disabled MCP and stall.
+  skipIf: isYoutubeEnabled,
   ops: [
     { kind: 'move_to', target: S.sidebarActions },
     { kind: 'popup', text: 'Peek at Actions.' },

@@ -1,6 +1,18 @@
 import type { OnboardingStep } from './types';
 import { S } from '../selectors';
-import { hasAnyAgentLaunched } from './skipPredicates';
+import { hasAnyAgentLaunched, isYoutubeEnabled } from './skipPredicates';
+
+// Primary demo: summarize a YouTube video — requires the YouTube
+// transcript MCP, which step 2 enables. If a user reaches step 3 with
+// YouTube not enabled (they skipped step 2's flow, dismissed it, or
+// toggled YouTube back off), the agent would hang trying to call a
+// missing MCP. The fallback prompt uses the agent's built-in web tools
+// to do live research — same "agent does real work" demo, no MCP
+// dependency.
+const YOUTUBE_PROMPT =
+  'What is this youtube video about: https://youtu.be/_NKj8KQMY-k?si=rEk4KO2bOpa5Vo0z. Do not use browser agents.';
+const FALLBACK_PROMPT =
+  'Find the latest news about AI from the web and give me a short summary.';
 
 export const step03: OnboardingStep = {
   id: 'launch_agent',
@@ -24,12 +36,12 @@ export const step03: OnboardingStep = {
     {
       kind: 'type_into',
       target: S.chatInput,
-      // Anti-browser-agent directive: the YouTube summary can be
-      // answered entirely from the youtube transcript MCP without
-      // spawning a browser-agent. Browser agents misbehave under
-      // load (ReportProgress violation loops, rate-limit retries)
-      // and tank dashboard responsiveness. The transcript is plenty.
-      text: 'What is this youtube video about: https://youtu.be/_NKj8KQMY-k?si=rEk4KO2bOpa5Vo0z. Do not use browser agents.',
+      // Anti-browser-agent directive on the YouTube path: the summary
+      // can be answered entirely from the youtube transcript MCP, and
+      // browser agents misbehave under load. The fallback path
+      // intentionally USES web tools — that's the whole point of the
+      // fallback (no MCP needed, agent still demonstrates real work).
+      text: (state) => (isYoutubeEnabled(state) ? YOUTUBE_PROMPT : FALLBACK_PROMPT),
       speedMs: 12,
     },
     // Auto-send the prompt — same pattern as steps 5/6/8. Without this,

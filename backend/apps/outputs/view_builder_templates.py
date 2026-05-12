@@ -301,14 +301,23 @@ def _ensure_warm_python_venv() -> str | None:
         try:
             os.makedirs(cache_dir, exist_ok=True)
             # Pick the same python the workspace's run.sh would have
-            # picked, so the venv's binary is compatible.
+            # picked, so the venv's binary is compatible. Includes
+            # bare `python` as the last fallback for Windows, where
+            # there's no `python3` symlink — the installer ships just
+            # `python.exe`. On macOS/Linux the versioned candidates
+            # match first so we don't accidentally pick a system
+            # Python 2.x via the bare name.
             py = None
-            for candidate in ("python3.13", "python3.12", "python3.11", "python3.10", "python3"):
+            candidates = (
+                "python3.13", "python3.12", "python3.11", "python3.10",
+                "python3", "python",
+            )
+            for candidate in candidates:
                 if shutil.which(candidate):
                     py = candidate
                     break
             if py is None:
-                logger.warning("webapp-template warm-venv: no python3 on PATH")
+                logger.warning("webapp-template warm-venv: no python on PATH")
                 return None
 
             # Wipe any half-populated venv from a previous crashed run.
@@ -327,8 +336,13 @@ def _ensure_warm_python_venv() -> str | None:
             # Install the template's dependencies (fastapi[standard],
             # typeguard, transitives) — NOT the workspace's own backend,
             # which gets editable-installed per-workspace by run.sh after
-            # the cache copy.
-            pip = os.path.join(venv_dir, "bin", "pip")
+            # the cache copy. The venv layout differs by platform:
+            # POSIX puts executables in `bin/`, Windows in `Scripts/`,
+            # and the executable name itself gets `.exe`.
+            if os.name == "nt":
+                pip = os.path.join(venv_dir, "Scripts", "pip.exe")
+            else:
+                pip = os.path.join(venv_dir, "bin", "pip")
             deps = ["fastapi[standard]", "typeguard==4.4.2"]
             r = subprocess.run(
                 [pip, "install", "--disable-pip-version-check", *deps],

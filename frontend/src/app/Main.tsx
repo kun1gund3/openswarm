@@ -32,19 +32,27 @@ const OnboardingRoot = lazy(() =>
 );
 const SignInGate = lazy(() => import('./components/SignInGate'));
 
-// Idle-prefetch the Views chunk (the App Builder page) so a first click
-// on Apps in the sidebar doesn't pay 200-600ms for the webpack chunk
-// download. Views/ViewEditor pulls in CodeMirror + the entire app
-// runtime preview, so it's the largest lazy chunk by a wide margin.
-// requestIdleCallback waits until the main thread is quiet — won't
-// compete with first paint, sign-in, or onboarding boot.
+// Idle-prefetch the lazy page chunks so first-click on any sidebar
+// entry doesn't pay 200-600ms for the webpack chunk download. Each
+// `void import('...')` triggers webpack to stream the chunk in the
+// background; React.lazy returns the cached module instantly when the
+// user finally navigates. We do them sequentially inside one idle
+// callback to avoid all six firing at once and contending for network
+// + parse time during first paint.
 if (typeof window !== 'undefined') {
-  const prefetchViews = () => { void import('./pages/Views/Views'); };
+  const prefetchAll = () => {
+    void import('./pages/Views/Views');
+    void import('./pages/Skills/Skills');
+    void import('./pages/Tools/Tools');
+    void import('./pages/Modes/Modes');
+    void import('./pages/Customization/Customization');
+    void import('./pages/Analytics/Analytics');
+  };
   const ric = (window as any).requestIdleCallback as
     | ((cb: () => void, opts?: { timeout?: number }) => number)
     | undefined;
-  if (ric) ric(prefetchViews, { timeout: 4000 });
-  else window.setTimeout(prefetchViews, 2000);
+  if (ric) ric(prefetchAll, { timeout: 4000 });
+  else window.setTimeout(prefetchAll, 2000);
 }
 import { report, getSessionTraceState, getRecentActions } from '@/shared/serviceClient';
 import { useRouteTracker } from '@/shared/hooks/useRouteTracker';

@@ -23,11 +23,26 @@ export type ACOp =
   | { kind: 'popup'; text: string; cta?: string }
   | { kind: 'multi_choice'; opId: string; question: string; options: ACMultiChoiceOption[] }
   | { kind: 'highlight_section'; target: Selector; popup?: string; durationMs?: number }
-  | { kind: 'type_into'; target: Selector; text: string; speedMs?: number }
+  | {
+      kind: 'type_into';
+      target: Selector;
+      // String for static text; function for runtime branching (e.g. step
+      // 3 picks YouTube prompt if isYoutubeEnabled, else a web-research
+      // fallback). Evaluated once at op-execution time against current
+      // Redux state — not reactive to subsequent state changes.
+      text: string | ((state: RootState) => string);
+      speedMs?: number;
+    }
   | { kind: 'click'; target: Selector; simulate?: boolean }
   | { kind: 'drag_select'; target: Selector }
   | { kind: 'wait_user'; condition: AdvanceCondition; hint?: string; timeoutMs?: number }
   | { kind: 'delay'; ms: number }
+  // Poll a raw CSS selector (not a data-onboarding shorthand) until it
+  // appears in the DOM, up to `timeoutMs`. Used by step 8 to wait for
+  // the App Builder's scoped chat-input to mount before typing into it
+  // (previously a fixed 1500ms delay that under-fit slow cold-starts
+  // and over-fit warm ones).
+  | { kind: 'wait_for_dom'; css: string; timeoutMs?: number }
   | { kind: 'outro' };
 
 export type AdvanceCondition =

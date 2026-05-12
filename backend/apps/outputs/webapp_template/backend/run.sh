@@ -75,6 +75,13 @@ else
 fi
 
 # --- Start the backend server ---
+# No --reload here: this is the user's generated workspace, not an
+# OpenSwarm dev environment. The agent rewrites files whole-file
+# during builds; uvicorn's WatchFiles supervisor would just tear down
+# the running server every keystroke. When the agent explicitly wants
+# the backend to pick up new code it can hit OpenSwarm's
+# /api/outputs/workspace/{ws}/runtime/restart endpoint, which sends a
+# clean SIGTERM and restarts via this same script.
 echo "Starting backend server on http://0.0.0.0:${BACKEND_PORT:-8324} ..."
 cd "$BACKEND_DIR_ABSPATH/.."
-python -m uvicorn backend.main:app --host 0.0.0.0 --port "${BACKEND_PORT:-8324}" --reload
+python -m uvicorn backend.main:app --host 0.0.0.0 --port "${BACKEND_PORT:-8324}"

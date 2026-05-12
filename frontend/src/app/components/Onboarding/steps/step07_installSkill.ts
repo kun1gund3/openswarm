@@ -1,6 +1,6 @@
 import type { OnboardingStep } from './types';
 import { S } from '../selectors';
-import { hasAnySkillInstalled } from './skipPredicates';
+import { hasPdfSkillInstalled } from './skipPredicates';
 
 export const step07: OnboardingStep = {
   id: 'install_skill',
@@ -10,7 +10,11 @@ export const step07: OnboardingStep = {
   description: 'Teach agents how to handle specific tasks.',
   videoSrc: './onboarding-videos/v2/07.mp4',
   videoDurationLabel: '0:24',
-  skipIf: hasAnySkillInstalled,
+  // Narrowed from hasAnySkillInstalled → hasPdfSkillInstalled so a
+  // user who's installed any *other* skill still gets walked through
+  // the PDF-install demo (which is what the step's targets + popups
+  // are pointed at).
+  skipIf: hasPdfSkillInstalled,
   ops: [
     { kind: 'move_to', target: S.sidebarSkills },
     { kind: 'popup', text: 'Wander into Skills.' },

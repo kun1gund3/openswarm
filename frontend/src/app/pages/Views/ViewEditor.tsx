@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback, PointerEvent as ReactPointerEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -22,11 +23,13 @@ import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import FolderIcon from '@mui/icons-material/Folder';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import Collapse from '@mui/material/Collapse';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useAppDispatch, useAppSelector } from '@/shared/hooks';
 import { createDraftSession, removeDraftSession, fetchSession } from '@/shared/state/agentsSlice';
-import { createOutput, updateOutput, Output, SERVE_BASE } from '@/shared/state/outputsSlice';
+import { createOutput, updateOutput, fetchOutputs, Output, SERVE_BASE } from '@/shared/state/outputsSlice';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 import AgentChat from '../AgentChat/AgentChat';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -40,6 +43,24 @@ import { API_BASE, getAuthToken } from '@/shared/config';
 import { onboardingBus } from '@/app/components/Onboarding/eventBus';
 
 const WORKSPACE_API = `${API_BASE}/outputs/workspace`;
+
+// File-tree noise defaults. VSCode's equivalent `files.exclude` hides
+// the same set (plus a few more) — we apply by basename anywhere in
+// the path so e.g. `frontend/node_modules` and `frontend/dist` are
+// both filtered out. User can flip `showHidden` to bypass. Anything
+// the agent legitimately writes lives in `src/`, `public/`,
+// `backend/`, `package.json`, `vite.config.ts`, `.env`, `README.md`
+// — none of those collide with this set.
+const HIDDEN_PATH_SEGMENTS = new Set<string>([
+  'node_modules',
+  '.vite-cache',
+  '.vite',
+  '.git',
+  'dist',
+  '.next',
+  '__pycache__',
+  '.venv',
+]);
 // Workspace state poll cadence. While the agent is actively writing
 // files we want a snappy 2s so the file tree / code panes stay in
 // sync. Once the agent goes idle there's no reason to keep hammering
@@ -215,6 +236,7 @@ interface Props {
 const ViewEditor: React.FC<Props> = ({ output }) => {
   const c = useClaudeTokens();
   const dispatch = useAppDispatch();
+  const navigate = useNavigate();
 
   const [createdId, setCreatedId] = useState<string | null>(null);
   const createdIdRef = useRef<string | null>(null);
@@ -240,6 +262,9 @@ const ViewEditor: React.FC<Props> = ({ output }) => {
 
   const [activeTab, setActiveTab] = useState(TAB_PREVIEW);
   const [activeFile, setActiveFile] = useState('index.html');
+  // When false, HIDDEN_PATH_SEGMENTS get filtered out of the file tree.
+  // Persisted to the workspace's localStorage so toggle survives reload.
+  const [showHidden, setShowHidden] = useState(false);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Skip preview reloads when nothing the user can SEE changed.
   // The iframe renders index.html; if a save only touched SKILL.md or
@@ -421,6 +446,30 @@ const ViewEditor: React.FC<Props> = ({ output }) => {
         });
         const data = await res.json();
         setWorkspacePath(data.path);
+        // Backend creates an Output record at seed time for
+        // webapp_template workspaces (workspace_id wired up, name
+        // "Untitled App"). Adopt that id NOW so:
+        //  1. The Apps sidebar refresh below shows the in-progress app
+        //     immediately — users who navigate away can find it again.
+        //  2. Later autosaves take the updateOutput branch (using
+        //     `output?.id ?? createdIdRef.current`) instead of trying
+        //     to recreate.
+        // Old flat-mode seeds don't return output_id; that path keeps
+        // its previous behavior (create-on-first-autosave).
+        if (typeof data?.output_id === 'string' && data.output_id) {
+          createdIdRef.current = data.output_id;
+          setCreatedId(data.output_id);
+          // Refresh the Apps list so the new app shows up in the sidebar
+          // before the user navigates away from /apps/new.
+          dispatch(fetchOutputs());
+          // Replace /apps/new in the URL with /apps/{output_id} so a
+          // reload (or back-button return) lands back on the same
+          // workspace instead of spinning up yet another fresh seed.
+          // Use replace so /apps/new doesn't pile up in history.
+          if (window.location.hash.includes('/apps/new')) {
+            navigate(`/apps/${data.output_id}`, { replace: true });
+          }
+        }
         const action = dispatch(createDraftSession({
           mode: 'view-builder',
           setActive: false,
@@ -811,7 +860,31 @@ const ViewEditor: React.FC<Props> = ({ output }) => {
     ? undefined
     : (frontendUrl ?? (workspaceId ? `${SERVE_BASE}/workspace/${workspaceId}/serve/index.html` : undefined));
 
-  const filePaths = useMemo(() => Object.keys(files).filter(p => p !== 'meta.json' && p !== 'SKILL.md').sort(), [files]);
+  // VSCode-style default `files.exclude`: hide build/install noise from
+  // the file tree by default. With the symlinked node_modules + vite's
+  // per-workspace .vite-cache, an unfiltered tree renders hundreds of
+  // MUI/icons chunks the agent + user have no reason to look at. They
+  // can still be opened via the Workspace folder in Finder if needed.
+  // Single-source-of-truth predicate so the file list, tree, and
+  // open-file routing all agree on what counts as visible.
+  const isHiddenPath = useCallback((p: string): boolean => {
+    if (showHidden) return false;
+    // Treat exact basenames + any nested occurrence as hidden.
+    const segments = p.split('/');
+    for (const seg of segments) {
+      if (HIDDEN_PATH_SEGMENTS.has(seg)) return true;
+    }
+    return false;
+  }, [showHidden]);
+
+  const filePaths = useMemo(
+    () =>
+      Object.keys(files)
+        .filter((p) => p !== 'meta.json' && p !== 'SKILL.md')
+        .filter((p) => !isHiddenPath(p))
+        .sort(),
+    [files, isHiddenPath],
+  );
   const fileTree = useMemo(() => buildFileTree(filePaths), [filePaths]);
 
   const updateFile = useCallback((path: string, content: string) => {
@@ -1144,6 +1217,22 @@ const ViewEditor: React.FC<Props> = ({ output }) => {
                   >
                     Files
                   </Typography>
+                  <Tooltip
+                    title={showHidden ? 'Hide build/install dirs' : 'Show hidden (node_modules, .vite-cache, etc.)'}
+                    placement="top"
+                  >
+                    <IconButton
+                      size="small"
+                      onClick={() => setShowHidden((v) => !v)}
+                      sx={{ p: 0.25, color: c.text.ghost, '&:hover': { color: c.accent.primary } }}
+                    >
+                      {showHidden ? (
+                        <VisibilityOffIcon sx={{ fontSize: 14 }} />
+                      ) : (
+                        <VisibilityIcon sx={{ fontSize: 14 }} />
+                      )}
+                    </IconButton>
+                  </Tooltip>
                   <Tooltip title="New file" placement="top">
                     <IconButton
                       size="small"

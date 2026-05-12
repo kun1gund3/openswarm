@@ -121,6 +121,43 @@ export default function Card() {
 - **Use the `sx` prop** for styles, not separate CSS files.
 - **Don't add Tailwind**, Bootstrap, or any other CSS framework.
 
+### MUI imports — ALWAYS use path imports, NEVER barrel imports
+
+This is non-negotiable. Vite pre-bundles every entry in a barrel import,
+which means a single `import { Button } from '@mui/material'` forces Vite
+to optimize 200+ MUI sub-modules — adding ~10–15 seconds to every cold
+boot of the workspace's preview. MUI's own performance guide
+(<https://mui.com/material-ui/guides/minimizing-bundle-size/>) recommends
+path imports for exactly this reason.
+
+```tsx
+// ✅ DO — path imports, one per component
+import Button from '@mui/material/Button';
+import Box from '@mui/material/Box';
+import Stack from '@mui/material/Stack';
+import Typography from '@mui/material/Typography';
+
+// ❌ DON'T — barrel imports drag in all of @mui/material
+import { Button, Box, Stack, Typography } from '@mui/material';
+```
+
+Same rule for icons — even more important there because
+`@mui/icons-material` re-exports thousands of SVG components:
+
+```tsx
+// ✅ DO
+import AddIcon from '@mui/icons-material/Add';
+import DeleteIcon from '@mui/icons-material/Delete';
+
+// ❌ DON'T
+import { Add, Delete } from '@mui/icons-material';
+```
+
+**Icon discipline:** keep icon imports to the minimum the UI actually
+uses. If a page only needs 4 icons, import 4 — don't pre-import 20 for
+"maybe later." Each icon import is another module Vite has to pre-bundle
+on first boot.
+
 Check `frontend/DESIGN.md` for the complete design system spec.
 
 ---
