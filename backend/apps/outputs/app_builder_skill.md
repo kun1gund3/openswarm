@@ -407,13 +407,39 @@ The three most common ways agent edits crash a React preview:
    edited and confirm every imported name is still used and every
    used name is still imported.
 
-2. **`Invalid hook call` from a duplicate React copy.** Running
-   `npm install react` or `npm install some-package-that-bundles-react`
-   inside the workspace adds a second React to `node_modules`, and the
-   two copies' hook dispatchers can't see each other → every `useState`
-   call throws on mount. The template's `node_modules` is symlinked to
-   a shared warm cache; only add packages whose `peerDependencies`
-   declare a non-bundled React. If you see `Cannot read properties of null (reading 'useState')`, suspect a duplicate React first.
+2. **`Invalid hook call` from a duplicate React copy.** The single
+   most common way to break a workspace. Symptom in Terminal:
+   `[FRONTEND] Cannot read properties of null (reading 'useState')`
+   AND `Invalid hook call ... You might have more than one copy of
+   React in the same app`. Happens when an `npm install` brought in
+   a package that bundles its own React (instead of declaring it as
+   a peer), so there are now TWO React instances in the workspace's
+   `node_modules` and the two copies' hook dispatchers can't see each
+   other.
+
+   **Fix (one shot):** from the workspace root run
+
+   ```bash
+   rm -rf frontend/node_modules && rm -rf frontend/.vite-cache
+   ```
+
+   Then trigger Hard Reload on the preview (right-click the reload
+   button in the toolbar). The workspace's `frontend/node_modules`
+   will re-symlink to the shared warm cache on next vite boot — only
+   ONE React copy exists across all App Builder apps, so the
+   duplicate is gone. The `.vite-cache` wipe is important because
+   vite caches pre-bundled deps including the duplicate React.
+
+   **How to avoid causing it in the first place:**
+   - **Never `npm install react` / `react-dom`** — the template
+     already has them via the symlinked warm cache.
+   - Before `npm install <pkg>`, check the package's `peerDependencies`
+     on npmjs.com. If `react` is listed under `peerDependencies` (good)
+     install it. If `react` is in `dependencies` (bad), find a
+     different package or pin a version known to use peer deps.
+   - Common offenders: older `react-pdf`, `react-pdf-viewer`, some
+     `@react-*` UI kits, anything from a tutorial published before
+     2020.
 
 3. **Hooks called outside a component body or after a conditional
    return.** `useState`/`useEffect`/`useMemo` must run in the same
