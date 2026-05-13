@@ -520,7 +520,7 @@ const StepCardBody: React.FC<StepCardProps> = ({
               // (recorded at a wider canvas than the OpenSwarm window
               // actually filled). Scaling up + overflow:hidden on the
               // parent crops them off the visible thumbnail area.
-              transform: 'scale(1.55)',
+              transform: 'scale(1.0)',
               transformOrigin: 'center',
               pointerEvents: 'none',
             }}
@@ -645,7 +645,7 @@ const StepCardBody: React.FC<StepCardProps> = ({
                   width: '100%',
                   height: '100%',
                   objectFit: 'cover',
-                  transform: 'scale(1.55)',
+                  transform: 'scale(1.0)',
                   transformOrigin: 'center',
                   display: 'block',
                 }}

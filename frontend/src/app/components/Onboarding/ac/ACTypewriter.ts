@@ -9,6 +9,14 @@
 // dispatch a real 'input' event. Setting `el.value = ...` directly is
 // silently ignored by React's onChange.
 
+// Version marker so we can verify the dev bundle actually reloaded after
+// editing this file. Check `window.__OPENSWARM_TYPEINTO__` in DevTools
+// — if it's missing or shows an older tag, Electron's renderer is
+// running a cached bundle and needs a Cmd+R hard-reload.
+if (typeof window !== 'undefined') {
+  (window as any).__OPENSWARM_TYPEINTO__ = 'v2-dom-direct-2026-05-12';
+}
+
 const INPUT_PROTO_VALUE_DESC =
   typeof window !== 'undefined'
     ? Object.getOwnPropertyDescriptor(
@@ -43,36 +51,62 @@ function dispatchInput(el: HTMLElement): void {
 }
 
 // contentEditable fields (the agent chat input is one) need a different
-// path. Setting textContent doesn't fire any of the events React's
-// onInput handler listens for, AND it nukes any rich-content children
-// (skill pills, etc). document.execCommand('insertText') is the
-// idiomatic way to programmatically type into a contentEditable — it
-// fires the same `input` events a real keystroke would.
+// path than <input>/<textarea>. Setting textContent nukes rich-content
+// children (skill pills, etc), so we append a Text node at the end and
+// dispatch a real InputEvent that React's reconciler treats as a
+// keystroke. We used to call document.execCommand('insertText') here
+// instead — that's the "idiomatic" way to programmatically type into a
+// contentEditable — but in Electron with a webview loaded in the
+// preview pane (App Builder step 8 / step 5 / step 6 all hit this),
+// the webview steals document focus during its load. execCommand
+// requires the host document to be focused AND the active element to
+// be editable; without focus it silently no-ops while still returning
+// true, so the wizard's `typeInto` "succeeded" but no characters ever
+// landed, hasContent stayed false on the chat input, the send button
+// never rendered, and step 8's `move_to chatSendButton` then burned
+// its 15 s waitForSelector and threw into the recovery popup. The
+// AC's "cursor" is purely visual — it never fires real focus events
+// — so there's no way to get document focus back without the user
+// clicking. DOM-level insertion + dispatched InputEvent works
+// regardless of focus state.
 function insertContentEditableText(el: HTMLElement, ch: string): void {
   el.focus();
-  // Place caret at end so insertion appends rather than overwrites.
+  // Append at the very end of the editable. Walk to the deepest
+  // last-text-node so we don't insert into the middle of a skill pill
+  // wrapper (those are inline-block element children with their own
+  // text). If the last child is an element (e.g., a <span> skill
+  // pill), we append a sibling text node after it.
   const range = document.createRange();
-  range.selectNodeContents(el);
-  range.collapse(false);
+  const last = el.lastChild;
+  if (last && last.nodeType === Node.TEXT_NODE) {
+    range.setStart(last, (last.nodeValue ?? '').length);
+    range.collapse(true);
+    (last as Text).appendData(ch);
+    range.setStart(last, (last.nodeValue ?? '').length);
+    range.collapse(true);
+  } else {
+    const textNode = document.createTextNode(ch);
+    el.appendChild(textNode);
+    range.setStart(textNode, ch.length);
+    range.collapse(true);
+  }
   const sel = window.getSelection();
   if (sel) {
     sel.removeAllRanges();
     sel.addRange(range);
   }
-  // execCommand is deprecated but still the only cross-browser way to
-  // get React-friendly synthetic input events into a contentEditable.
-  // Falls back to direct text-node append if execCommand is rejected
-  // (some embedded webviews disable it).
-  let ok = false;
-  try {
-    ok = document.execCommand('insertText', false, ch);
-  } catch {
-    ok = false;
-  }
-  if (!ok) {
-    el.appendChild(document.createTextNode(ch));
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: ch, inputType: 'insertText' }));
-  }
+  // React's controlled-input bridge listens for `input` events. The
+  // `inputType: insertText` + `data: ch` mirrors what a real keystroke
+  // produces, so handleInput → updateHasContent fires and hasContent
+  // flips true → the send button finally renders.
+  el.dispatchEvent(
+    new InputEvent('input', {
+      bubbles: true,
+      cancelable: true,
+      data: ch,
+      inputType: 'insertText',
+    }),
+  );
 }
 
 export interface TypeIntoOptions {
@@ -101,6 +135,18 @@ export async function typeInto(
   const speed = opts.speedMs ?? 18;
   el.focus();
 
+  // Per-character cadence is constant (no jitter — variable timing reads
+  // as glitchy, not natural). The one exception: insert a natural-reading
+  // pause after a comma / sentence-terminator / colon / semicolon so the
+  // streamed text breathes the way a human would. Anything else types at
+  // the constant `speed` value, beat by beat.
+  const punctPause = (ch: string): number => {
+    if (ch === ',') return 220;
+    if (ch === '.' || ch === '!' || ch === '?') return 320;
+    if (ch === ':' || ch === ';') return 180;
+    return 0;
+  };
+
   // Branch on element kind. contentEditable (the agent ChatInput uses
   // a contentEditable div for skill-pill support) requires execCommand;
   // <input>/<textarea> require the React-prototype-setter dance.
@@ -108,7 +154,7 @@ export async function typeInto(
     for (const ch of text) {
       insertContentEditableText(el, ch);
       opts.onTick?.();
-      await new Promise((r) => window.setTimeout(r, speed));
+      await new Promise((r) => window.setTimeout(r, speed + punctPause(ch)));
     }
   } else {
     let acc = '';
@@ -120,7 +166,7 @@ export async function typeInto(
       nativeSetValue(el, acc);
       dispatchInput(el);
       opts.onTick?.();
-      await new Promise((r) => window.setTimeout(r, speed));
+      await new Promise((r) => window.setTimeout(r, speed + punctPause(ch)));
     }
   }
 

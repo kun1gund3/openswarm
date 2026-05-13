@@ -6,8 +6,64 @@ backend you can opt into on demand). It's served live to a webview, so it
 behaves like a real browser tab — cross-origin `fetch`, popups, mic/camera,
 clipboard, anything a normal web page does.
 
-You are **NOT** writing a single HTML file or vanilla JS. Match the
-codebase's patterns.
+---
+
+## STEP 0 — pick the right shape for the app
+
+Before writing any code, decide whether this app should be **workspace**
+(full React/MUI, the default) or **lightweight** (one self-contained
+`index.html`). Picking wrong wastes the user's time: the workspace path
+spends ~10-30 s pre-bundling MUI and React on first preview, which is
+pointless when the app is a 200-line Three.js demo.
+
+**Lightweight** when ALL apply:
+- One page, no route navigation
+- No persisted server state (no DB-shaped data the user comes back to)
+- No real backend logic (just CDN libraries, in-memory state)
+- The whole UI is essentially one of: canvas/WebGL scene, single-file
+  visualization (D3/Plotly/Chart.js), single-purpose tool (formatter,
+  calculator, color picker), tiny game or simulator
+
+**Workspace** (this document's default) when ANY apply:
+- Multiple pages with sidebar/route navigation
+- Multiple distinct UI sections with their own state
+- Real backend (FastAPI endpoints, file uploads with server processing,
+  auth, persisted user data)
+- Real-time updates (WS/SSE)
+- The user is likely to ask for more features later (chat, dashboards,
+  CRUD apps — these grow)
+
+**Examples — lightweight:** "rotating Three.js cube", "Pomodoro timer",
+"JSON formatter", "Mandelbrot explorer", "CSV → bar chart (no save)",
+"first-person Minecraft-style demo", "color picker", "regex tester".
+
+**Examples — workspace:** "chat app", "PDF previewer with annotations",
+"task manager with categories", "recipe app", "weather dashboard with
+saved cities", "Slack-style team chat with channels".
+
+If you're unsure, lean **workspace** — it's strictly more capable and the
+boot cost only hits once per app, then warm cache makes subsequent boots
+fast.
+
+### Lightweight — how
+
+1. Delete everything under `frontend/src/` (`index.tsx`, `app/`, `pages/`,
+   `shared/`). Vite serves `frontend/index.html` directly when there's no
+   module graph to crawl, so the pre-bundle step is skipped entirely.
+2. Replace `frontend/index.html` with a single self-contained document.
+   Inline `<style>` and `<script>`. Pull libraries from `esm.sh` /
+   `unpkg` via `<script type="importmap">` or plain `<script src=...>`.
+3. Leave `frontend/package.json`, `frontend/vite.config.ts`, `run.sh`,
+   `.env`, `meta.json` alone — vite still needs them.
+4. Don't run `bash backend_init.sh` — lightweight mode has no backend.
+
+The rest of this document covers **workspace mode**. If you picked
+lightweight, only the "Debugging" section (frontend console logs in the
+Terminal pane) is relevant; skip everything else.
+
+You are **NOT** writing a single HTML file or vanilla JS *inside a
+workspace*. If you picked workspace mode above, match the codebase's
+patterns described below.
 
 ---
 

@@ -84,6 +84,19 @@ if [ ! -f "$UV_BIN_DIR/uvx" ]; then
     rm -rf /tmp/uv-*-apple-darwin
 fi
 
+# --- Reap any backend leftover from a prior unclean exit ---
+# If the user double-Ctrl+C'd a previous run, or a workspace's signal
+# propagation killed the parent before cleanup() ran SIGKILL, uvicorn
+# can still be bound to :8324 even though the shell prompt returned.
+# That makes the next `bash run.sh` fail with Errno 48 "Address already
+# in use" and leaves the user thinking the dev loop is broken. Free the
+# port up front instead of asking the user to debug.
+if lsof -ti :8324 >/dev/null 2>&1; then
+    echo -e "${YELLOW}${BOLD}[preflight]${RESET} Port 8324 still bound from a prior run — killing stale process..."
+    lsof -ti :8324 | xargs kill -9 2>/dev/null || true
+    sleep 0.3
+fi
+
 # --- Start backend ---
 # Mark this as a dev launch so backend/run.sh enables --reload. Packaged
 # builds never run this top-level script (Electron spawns backend

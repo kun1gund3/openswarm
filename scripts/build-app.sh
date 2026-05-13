@@ -346,6 +346,19 @@ else
 fi
 echo ""
 
+# Step 3c: Pre-build the webapp-template node_modules archive so first-app
+# create on a fresh user install decompresses (~3 s) instead of running a
+# live `npm install` (~22 s). The backend's _try_extract_bundled_archive
+# is sha-tagged + falls through cleanly if the archive is missing or
+# stale, so this step is purely an optimization — skip silently if the
+# template snapshot or npm aren't available.
+if [[ -f "$PROJECT_ROOT/backend/apps/outputs/webapp_template/frontend/package.json" ]] \
+   && command -v npm >/dev/null 2>&1; then
+    echo "[3c/5] Pre-building webapp-template node_modules archive..."
+    bash "$PROJECT_ROOT/scripts/build-template-archive.sh"
+    echo ""
+fi
+
 # Step 4: Snapshot source directories for packaging
 # (Router was already staged in step 3; do not touch STAGING_DIR/router/ here.)
 echo "[4/5] Snapshotting source directories..."

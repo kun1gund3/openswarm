@@ -1,5 +1,7 @@
-import React, { useRef, useEffect, useMemo, forwardRef, useImperativeHandle, useState } from 'react';
+import React, { useRef, useEffect, useMemo, useCallback, forwardRef, useImperativeHandle, useState } from 'react';
 import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
+import { Skeleton } from '@/app/components/Loading';
 import { useElementSelection } from '@/app/components/ElementSelectionContext';
 import { useIframeElementSelector } from './useIframeElementSelector';
 import { getAuthToken, ensureAuthToken } from '@/shared/config';
@@ -92,6 +94,50 @@ const ViewPreview = forwardRef<ViewPreviewHandle, Props>(({
     return `${serveUrl}${sep}_d=${encodeURIComponent(dataParam)}&_v=${reloadKey}&token=${encodeURIComponent(authToken)}`;
   }, [serveUrl, inputData, backendResult, reloadKey, authToken]);
 
+  // Pause the iframe when the Electron window is hidden (minimized, occluded,
+  // user switched to a different desktop space). Vite's HMR client keeps a
+  // WS heartbeat open + the app's rAF loops keep running otherwise — pure
+  // wasted CPU since nobody can see the result. Swap to about:blank, which
+  // destroys the previous document and closes its HMR connection cleanly.
+  // Only applies to URL-mode (vite dev server). Srcdoc apps stay put — they
+  // don't run HMR and pausing them would silently wipe arbitrary in-memory
+  // user state.
+  const [windowHidden, setWindowHidden] = useState(
+    () => typeof document !== 'undefined' && document.visibilityState === 'hidden',
+  );
+  useEffect(() => {
+    const onVis = () => setWindowHidden(document.visibilityState === 'hidden');
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+
+  const effectiveSrc = useMemo(() => {
+    if (!iframeSrc) return iframeSrc;
+    return windowHidden ? 'about:blank' : iframeSrc;
+  }, [iframeSrc, windowHidden]);
+
+  // "Restoring preview…" overlay covers the gap between window-restore and
+  // the iframe finishing its second navigation back to the dev server. Set
+  // on hidden→visible transition; cleared by iframe load (or 5 s safety).
+  const [restoring, setRestoring] = useState(false);
+  const wasHiddenRef = useRef(windowHidden);
+  useEffect(() => {
+    if (wasHiddenRef.current && !windowHidden && iframeSrc) {
+      setRestoring(true);
+      const t = window.setTimeout(() => setRestoring(false), 5000);
+      wasHiddenRef.current = windowHidden;
+      return () => window.clearTimeout(t);
+    }
+    wasHiddenRef.current = windowHidden;
+    return undefined;
+  }, [windowHidden, iframeSrc]);
+
+  const handleNavigationLoad = useCallback(() => {
+    // load fires for both the about:blank pause-step AND the restored URL —
+    // only the latter should clear the overlay.
+    if (!windowHidden) setRestoring(false);
+  }, [windowHidden]);
+
   const srcdoc = useMemo(() => {
     if (serveUrl || !frontendCode) return undefined;
     return buildSrcdoc(frontendCode, inputData, backendResult);
@@ -169,6 +215,19 @@ const ViewPreview = forwardRef<ViewPreviewHandle, Props>(({
     };
   }, [useWebview, onConsoleMessage, iframeSrc]);
 
+  // Webviews don't surface a React-style `onLoad` prop; subscribe to the
+  // Electron-specific `did-finish-load` event to clear the restoring
+  // overlay after the about:blank→iframeSrc transition completes.
+  useEffect(() => {
+    if (!useWebview) return;
+    const wv = webviewRef.current;
+    if (!wv) return;
+    wv.addEventListener?.('did-finish-load', handleNavigationLoad);
+    return () => {
+      try { wv.removeEventListener?.('did-finish-load', handleNavigationLoad); } catch (_e) {}
+    };
+  }, [useWebview, handleNavigationLoad]);
+
   const hasContent = !!(serveUrl || frontendCode?.trim());
 
   if (!hasContent) {
@@ -224,7 +283,7 @@ const ViewPreview = forwardRef<ViewPreviewHandle, Props>(({
           // — preserves the prior frame's pixels through reload, same
           // pattern as the iframe path.
           key="url-mode-webview"
-          src={iframeSrc}
+          src={effectiveSrc}
           // Autoplay is the most common cross-app expectation; matches
           // the BrowserCard default. Plugins / nodeintegration stay off.
           webpreferences="autoplayPolicy=no-user-gesture-required"
@@ -248,7 +307,8 @@ const ViewPreview = forwardRef<ViewPreviewHandle, Props>(({
           // keeping the prior frame's pixels visible until the new doc
           // paints. No flash.
           key={iframeSrc ? 'url-mode' : 'srcdoc'}
-          src={iframeSrc}
+          src={effectiveSrc}
+          onLoad={handleNavigationLoad}
           sandbox="allow-scripts allow-same-origin"
           style={{
             width: '100%',
@@ -259,6 +319,27 @@ const ViewPreview = forwardRef<ViewPreviewHandle, Props>(({
           }}
           title="App Preview"
         />
+      )}
+      {restoring && (
+        <Box
+          sx={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 1.5,
+            bgcolor: '#fff',
+            zIndex: 2,
+            pointerEvents: 'none',
+          }}
+        >
+          <Skeleton variant="card" width={140} height={14} delayMs={0} />
+          <Typography sx={{ fontSize: '0.78rem', color: '#888', letterSpacing: '0.01em' }}>
+            Restoring preview…
+          </Typography>
+        </Box>
       )}
     </Box>
   );

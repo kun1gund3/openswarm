@@ -19,7 +19,7 @@ import {
 import { report, markStepStarted, clearStepTiming } from '../telemetry';
 import { onboardingBus, type OnboardingEvent } from '../eventBus';
 // (gate bump done via onboardingBus.resetReplayGate at runStep entry)
-import { waitForSelector } from '../selectors';
+import { waitForSelector, resolveSelector } from '../selectors';
 import {
   spawnGlowRect,
   clickRipple,
@@ -57,9 +57,10 @@ interface RunContext {
 // (move_to, click, type_into, drag_select, outro) or a popup replacement
 // is allowed to clear it. user-driven transitions (wait_user resolving)
 // also flow through here, but typically the user has already been
-// reading for longer than this anyway. Set to 3s — covers the streaming
-// typewriter cadence plus enough post-stream read time for most popups.
-const MIN_POPUP_DWELL_MS = 3000;
+// reading for longer than this anyway. 6 s = streaming typewriter
+// cadence + ~3 s post-stream read time, which was the user-asked floor
+// for popups that don't require an explicit user action to advance.
+const MIN_POPUP_DWELL_MS = 6000;
 
 // Resolves once `ms` has elapsed or the signal aborts (whichever
 // comes first). Used inside ensurePopupDwell so a step cancel doesn't
@@ -214,13 +215,52 @@ export async function runStep(args: RunStepArgs): Promise<void> {
       }
       const showMessage = !signal.reason || signal.reason !== 'user-cancel';
       if (showMessage) {
+        // Diagnostic: surface a short version of the actual error in
+        // the recovery popup so we can see WHY the step bailed without
+        // needing DevTools open. 180-char cap keeps it readable.
+        const isAbortErr =
+          (err as DOMException)?.name === 'AbortError' || signal.aborted;
+        const errSnippet = isAbortErr
+          ? ''
+          : ((err as Error)?.message ?? String(err)).slice(0, 180);
+        const debugSuffix = errSnippet
+          ? `\n\n[debug] ${errSnippet}`
+          : '';
+        // Stash the full error on window so a dev can grab it from
+        // DevTools (`window.__OPENSWARM_LAST_ONBOARDING_ERR__`) even
+        // if the streaming popup hides the suffix. Full untruncated
+        // message + stack lives here, the 180-char snippet is just
+        // for the popup.
+        try {
+          (window as any).__OPENSWARM_LAST_ONBOARDING_ERR__ = {
+            step_id: step.id,
+            message: (err as Error)?.message ?? String(err),
+            stack: (err as Error)?.stack,
+            at: new Date().toISOString(),
+          };
+          // eslint-disable-next-line no-console
+          console.error(
+            '[onboarding] step bailed:',
+            step.id,
+            (err as Error)?.message ?? err,
+            err,
+          );
+        } catch {
+          /* defensive — never let diagnostics throw */
+        }
         ac.showPopup(
-          "No worries — feel free to explore. Tap Show me whenever you're ready.",
+          "No worries, feel free to explore. Tap Show me whenever you're ready." +
+            debugSuffix,
         );
-        // 3.5s gives most readers enough time to actually parse the
-        // recovery hint. Earlier 1.4s value was tuned for "snappy" but
-        // the popup was vanishing before users could read it.
-        await new Promise<void>((r) => window.setTimeout(r, 3500));
+        // ACPopup streams text at ~30 ms/char + ~210 ms per punctuation
+        // mark, so a 240-char popup (base copy + 180-char debug
+        // suffix) takes ~10 s just to finish streaming. With a 5 s
+        // dwell the [debug] line never even appears on screen before
+        // the popup closes — which is why the user saw only the base
+        // recovery copy in every failure run. 14 s gives the streamer
+        // time to finish AND leaves a few seconds for the user to
+        // actually read the diagnostic line.
+        await new Promise<void>((r) => window.setTimeout(r, 14000));
       }
     } catch {
       /* defensive — never let cleanup throw */
@@ -284,6 +324,16 @@ async function runOps(ops: ACOp[], ctx: RunContext): Promise<void> {
           duration_ms: Date.now() - opStart,
           error: String(err),
         });
+        // Console-visible breadcrumb so a dev with DevTools open can
+        // see WHICH op of WHICH step blew up without parsing telemetry.
+        // The catch in runStep above selectively logs based on error
+        // kind — this is more reliable and pinpoints the failing op.
+        // eslint-disable-next-line no-console
+        console.error(
+          `[onboarding] op failed: step=${ctx.stepId} op#${i}=${op.kind} ` +
+            `duration=${Date.now() - opStart}ms`,
+          { op, error: err },
+        );
       }
       throw err;
     }
@@ -503,40 +553,82 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
       return;
     }
     case 'type_into': {
-      const el = await waitForSelector(op.target);
-      if (scrollIntoViewIfNeeded(el)) {
-        await sleep(180);
-      }
-      const r = el.getBoundingClientRect();
-      await ac.moveTo(Math.min(r.right - 14, r.left + r.width / 2), r.top + r.height / 2);
-      ac.startTracking(op.target, { x: 0, y: 0 });
-      // Resolve text — string-or-function. Function form lets a step
-      // pick its prompt at run-time based on current Redux state (e.g.
-      // step 3's YouTube vs. web-research fallback).
+      // Resolve text up-front — string-or-function. Function form lets a
+      // step pick its prompt at run-time based on current Redux state
+      // (e.g. step 3's YouTube vs. web-research fallback).
       const resolvedText =
         typeof op.text === 'function' ? op.text(ctx.store.getState()) : op.text;
-      await typeInto(el, resolvedText, { speedMs: op.speedMs });
-      // Anti-revert guard: some controlled contentEditable libraries
-      // re-render on their own schedule and wipe AC's typed text in
-      // the next React commit. Re-check the input value after a brief
-      // beat and re-insert if it got wiped. Without this, the next
-      // op (typically click send) hits a disabled send button because
-      // the input "thinks" it's empty.
-      await sleep(80);
+      const targetTrimmed = resolvedText.trim();
+
       const readText = (e: HTMLElement): string => {
         if (e.isContentEditable) return (e.textContent ?? '').trim();
         if (e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement)
           return (e.value ?? '').trim();
         return (e.textContent ?? '').trim();
       };
-      const target = resolvedText.trim();
-      if (target && readText(el).length < Math.floor(target.length * 0.8)) {
-        // Single-shot re-insert. Same path the typewriter's own
-        // fallback uses for under-load typing drops.
-        if (el.isContentEditable) {
-          el.focus();
+
+      // Type-and-verify is wrapped in a retry loop because the App
+      // Builder's chat input can be detached out from under us mid-
+      // stream: the workspace's `runtime/start → stop → start` cycle +
+      // ViewEditor's seed-then-navigate causes React to swap the
+      // AgentChat instance the user can see, leaving the element our
+      // `el` ref points at detached from the DOM. execCommand fires
+      // silently into the dead node, no text lands, hasContent stays
+      // false, and the send button never renders — which is what was
+      // pushing the wizard into the recovery popup. On a verify-miss
+      // we re-fetch the selector (which now resolves to the FRESH
+      // AgentChat's input) and type again. Two attempts is the max —
+      // a real "the input is genuinely broken" case shouldn't loop.
+      const MAX_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const el = await waitForSelector(op.target);
+        if (scrollIntoViewIfNeeded(el)) {
+          await sleep(180);
+        }
+        const r = el.getBoundingClientRect();
+        await ac.moveTo(
+          Math.min(r.right - 14, r.left + r.width / 2),
+          r.top + r.height / 2,
+        );
+        ac.startTracking(op.target, { x: 0, y: 0 });
+        await typeInto(el, resolvedText, { speedMs: op.speedMs });
+
+        // Let React's onInput commit land before verifying. 80 ms is
+        // enough in the warm-path; we sleep longer between retries
+        // because a remount window is what we're racing.
+        await sleep(80);
+
+        if (!targetTrimmed) return;
+        // Re-fetch in case the original `el` was detached by a remount.
+        // resolveSelector will return whatever the CURRENT canonical
+        // chat-input is in the scope priority order.
+        const currentEl = resolveSelector(op.target);
+        const verifyEl = currentEl ?? el;
+        const landed = readText(verifyEl);
+        if (landed.length >= Math.floor(targetTrimmed.length * 0.8)) {
+          // Success — text is in the live input.
+          return;
+        }
+
+        if (attempt < MAX_ATTEMPTS) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[onboarding] type_into verify-miss for "${op.target}" attempt ${attempt}/${MAX_ATTEMPTS} — typed=${landed.length}/${targetTrimmed.length}, retrying`,
+          );
+          // Wait long enough for any in-flight remount + reconcile to
+          // settle. 600 ms is longer than the ~500 ms stability window
+          // wait_for_dom uses, so by the time we retry the DOM is in
+          // its steady state.
+          await sleep(600);
+          continue;
+        }
+
+        // Final attempt — same single-shot re-insert the old anti-
+        // revert guard used, against whatever element is current.
+        if (verifyEl.isContentEditable) {
+          verifyEl.focus();
           const range = document.createRange();
-          range.selectNodeContents(el);
+          range.selectNodeContents(verifyEl);
           const sel = window.getSelection();
           if (sel) {
             sel.removeAllRanges();
@@ -546,13 +638,30 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
             document.execCommand('delete', false);
             const ok = document.execCommand('insertText', false, resolvedText);
             if (!ok) {
-              el.textContent = resolvedText;
-              el.dispatchEvent(new Event('input', { bubbles: true }));
+              verifyEl.textContent = resolvedText;
+              verifyEl.dispatchEvent(new Event('input', { bubbles: true }));
             }
           } catch {
-            el.textContent = resolvedText;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
+            verifyEl.textContent = resolvedText;
+            verifyEl.dispatchEvent(new Event('input', { bubbles: true }));
           }
+        }
+        // One last verify after the fallback — if text STILL didn't land,
+        // throw with a descriptive error so the wizard's catch block
+        // shows a useful diagnostic instead of letting the next op
+        // (move_to chatSendButton) burn 15 s on a button that will
+        // never render because hasContent is false. The thrown message
+        // appears in DevTools console via the op-failed breadcrumb.
+        await sleep(120);
+        const finalLanded = readText(resolveSelector(op.target) ?? verifyEl);
+        if (finalLanded.length < Math.floor(targetTrimmed.length * 0.5)) {
+          throw new Error(
+            `type_into: text never landed in "${op.target}" after ` +
+              `${MAX_ATTEMPTS} attempts (final length=${finalLanded.length}/${targetTrimmed.length}). ` +
+              `The chat input was probably detached by an in-flight remount — ` +
+              `check whether ViewEditor's seed-then-navigate is firing twice ` +
+              `or whether AgentChat's session key is swapping mid-stream.`,
+          );
         }
       }
       return;
@@ -690,7 +799,7 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
           step_id: ctx.stepId,
           event: op.condition.event,
         });
-        ac.showPopup("Didn't seem to go through — try again?");
+        ac.showPopup("Didn't seem to go through. Try again?");
         ctx.popupShownAt.current = performance.now();
         await waitForCondition(
           op.condition,
@@ -733,19 +842,68 @@ async function runOp(op: ACOp, ctx: RunContext): Promise<void> {
     case 'wait_for_dom': {
       const timeoutMs = op.timeoutMs ?? 8000;
       const POLL_MS = 100;
+      // Stability gate: the matched element has to be the SAME node for
+      // STABILITY_POLLS consecutive polls (≈ 500 ms continuous presence)
+      // before we return success. Without this, step 8 was finding the
+      // App Builder's chat-input on poll N, returning, then the next
+      // op's typing ran straight into AgentChat's remount (the
+      // `runtime/start → stop → start` cycle from a draftLaunchMap swap
+      // + React Strict Mode double-effect) — the input became detached
+      // mid-stream, execCommand('insertText') silently no-op'd into the
+      // dead node, no text landed, hasContent stayed false, the send
+      // button was never rendered, and the wizard's next move_to
+      // chatSendButton burned its 15 s waitForSelector and threw into
+      // the recovery popup. Requiring stable identity walls off the
+      // remount window so we only proceed once the runtime has settled.
+      const STABILITY_POLLS = 5;
       const startedAt = performance.now();
+      let stableEl: Element | null = null;
+      let stableCount = 0;
       while (performance.now() - startedAt < timeoutMs) {
         if (signal.aborted) {
           throw new DOMException('aborted', 'AbortError');
         }
-        if (document.querySelector(op.css)) return;
+        const hit = document.querySelector(op.css);
+        if (hit) {
+          if (hit === stableEl) {
+            stableCount += 1;
+            if (stableCount >= STABILITY_POLLS) return;
+          } else {
+            stableEl = hit;
+            stableCount = 1;
+          }
+        } else {
+          stableEl = null;
+          stableCount = 0;
+        }
         await sleep(POLL_MS);
       }
-      // Soft-success on timeout — same policy as wait_user's event_bus
-      // path. The next op (usually move_to / type_into) will hit its own
-      // waitForSelector and surface a clearer error if the target is
-      // genuinely missing.
-      return;
+      // Hard error on timeout, with DOM-state diagnostics so the dev
+      // console tells us WHY the selector didn't match — bare selector
+      // mismatch vs. the marker being on the right element but the
+      // wrong scope vs. nothing in DOM at all are three different bugs
+      // and we couldn't tell which from "step failed".
+      const scopeEls = Array.from(
+        document.querySelectorAll('[data-onboarding-scope]'),
+      ).map((e) => (e as HTMLElement).getAttribute('data-onboarding-scope'));
+      const chatInputEls = Array.from(
+        document.querySelectorAll('[data-onboarding="chat-input"]'),
+      );
+      const chatInputScopes = chatInputEls.map((el) => {
+        let p: HTMLElement | null = el.parentElement;
+        while (p) {
+          const s = p.getAttribute('data-onboarding-scope');
+          if (s) return s;
+          p = p.parentElement;
+        }
+        return '<no-scope>';
+      });
+      const msg =
+        `wait_for_dom: "${op.css}" did not appear within ${timeoutMs}ms ` +
+        `[scopes=${JSON.stringify(scopeEls)}; chatInputs=${chatInputEls.length}; ` +
+        `chatInputScopes=${JSON.stringify(chatInputScopes)}]`;
+      console.error('[onboarding]', msg);
+      throw new Error(msg);
     }
     case 'outro': {
       await ac.fadeOut(ctx.spawnPoint);

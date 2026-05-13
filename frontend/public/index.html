@@ -3,6 +3,33 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!--
+    Renderer CSP. Defense-in-depth: the only attacker model we care about
+    here is a compromised third-party page rendered inside a webview/iframe
+    breaking out into the host renderer. Real production isolation comes
+    from contextIsolation + sandbox in main.js, not this meta — but a CSP
+    silences Electron's "no CSP" dev warning AND blocks <object>/<embed>,
+    base-tag injection, and arbitrary cross-origin script tags as a cheap
+    extra layer. 'unsafe-eval' stays in script-src so webpack-dev-server's
+    HMR keeps working; the packaged build doesn't need it but it's harmless
+    given the bundle origins are 'self' + file:.
+  -->
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="
+      default-src 'self' file: data: blob: http://localhost:* http://127.0.0.1:* https://*.openswarm.com https://api.openswarm.com;
+      script-src 'self' 'unsafe-inline' 'unsafe-eval' file: http://localhost:* http://127.0.0.1:*;
+      style-src 'self' 'unsafe-inline' file: http://localhost:* http://127.0.0.1:* https://fonts.googleapis.com;
+      font-src 'self' data: file: https://fonts.gstatic.com;
+      img-src 'self' data: blob: file: http: https:;
+      media-src 'self' data: blob: http: https:;
+      connect-src 'self' file: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://api.openswarm.com https://*.openswarm.com https://openswarm.com https://api.github.com;
+      frame-src 'self' file: http://localhost:* http://127.0.0.1:*;
+      worker-src 'self' blob:;
+      object-src 'none';
+      base-uri 'self';
+    "
+  />
   <title>Open Swarm</title>
   <link rel="icon" href="./favicon.ico?v=2" sizes="16x16 32x32 48x48" />
   <link rel="apple-touch-icon" href="./apple-touch-icon.png" />

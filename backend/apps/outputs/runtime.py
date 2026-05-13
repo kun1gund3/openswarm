@@ -15,7 +15,9 @@ around (see `executor.py`) for legacy `/api/outputs/execute` callers.
 import asyncio
 import logging
 import os
+import signal
 import socket
+import subprocess
 import sys
 from collections import deque, OrderedDict
 from dataclasses import dataclass
@@ -44,6 +46,22 @@ _TERMINATE_GRACE_SECONDS = 3
 # the preview pane on a port that may never come up.
 _FRONTEND_BIND_TIMEOUT_SECONDS = 180
 _FRONTEND_BIND_POLL_INTERVAL = 0.5
+
+
+# Process-wide mutex that serializes new-mode workspace boots so only
+# ONE vite optimizeDeps run is in flight at a time. Acquired in
+# `AppRuntime.start` (new-mode branch only) BEFORE the run.sh spawn,
+# released by `_await_frontend_bind` the instant vite emits its
+# "frontend ready" log line — or by the timeout / failure paths.
+#
+# Why a module-level asyncio.Lock and not part of AppRuntimeManager:
+# the lock has to be acquired BEFORE the runtime is registered in
+# manager.runtimes (which happens inside manager.attach's own
+# `_lock`), and we can't hold both locks at once without inviting
+# deadlock. Lifting to the module keeps the two locks fully
+# independent — the manager lock guards the runtime dict, this one
+# guards "is anyone currently mid-MUI-bundle?"
+_vite_boot_lock = asyncio.Lock()
 
 # Number of idle (zero-attachment) runtimes the manager keeps alive in
 # its LRU before reaping the oldest. Trades memory for instant
@@ -80,6 +98,69 @@ _ERROR_PATTERNS = _re.compile(
     r"Cannot resolve"
     r")"
 )
+
+
+def _suspend_process_tree(proc: Optional[asyncio.subprocess.Process]) -> None:
+    """Send SIGSTOP to a workspace's subprocess so it consumes 0% CPU
+    while sitting in the LRU idle pool. The signal is delivered to the
+    PROCESS GROUP (negative PID) when the child is a session leader,
+    so vite + uvicorn + their npm/python subchildren all pause together.
+
+    No-op on Windows (SIGSTOP has no equivalent — the `OpenProcessToken` +
+    `NtSuspendProcess` route works but isn't worth the win32 surface
+    here; idle Windows runtimes just stay running, which is the current
+    behavior). Failures here are swallowed — if the process already died
+    a stop signal is meaningless."""
+    if proc is None or os.name == "nt":
+        return
+    try:
+        if proc.returncode is not None:
+            return
+        os.kill(proc.pid, signal.SIGSTOP)
+    except (ProcessLookupError, PermissionError, OSError):
+        # Already-dead or out-of-permission — both safe to ignore.
+        pass
+
+
+def _resume_process_tree(proc: Optional[asyncio.subprocess.Process]) -> None:
+    """SIGCONT a previously-suspended workspace process. Pair with
+    _suspend_process_tree. Microsecond cost; idempotent if the process
+    was never paused."""
+    if proc is None or os.name == "nt":
+        return
+    try:
+        if proc.returncode is not None:
+            return
+        os.kill(proc.pid, signal.SIGCONT)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _background_priority_kwargs() -> dict:
+    """Return the kwargs that lower the spawned subprocess's OS priority
+    to a "background" level. On POSIX this is `preexec_fn=os.nice(10)`,
+    which sets the child's nice to +10 BEFORE exec (so the renice covers
+    the entire bash → vite + uvicorn process tree). On Windows it's
+    `creationflags=BELOW_NORMAL_PRIORITY_CLASS`. The OS scheduler then
+    yields workspace cycles to whichever agent or browser tab is in the
+    user's foreground, so an in-background app build doesn't starve a
+    live chat session.
+
+    We intentionally do NOT pass `start_new_session=True` here even
+    though it would defend against an errant `kill 0` inside the
+    workspace propagating into the OpenSwarm group: doing so also
+    detaches the workspace from the terminal's foreground process
+    group, so a user Ctrl+C only reaches OpenSwarm itself and the
+    cleanup path has to chase every workspace by hand. If that path
+    is even slightly slow or gets interrupted by a second Ctrl+C, the
+    workspace's uvicorn / vite leaks past shutdown and the next
+    `bash run.sh` hits Errno 48 on port 8324. The `kill 0` propagation
+    is fixed at its source in the workspace template's run.sh
+    (uses `kill_tree` on tracked PIDs, never `kill 0`)."""
+    if os.name == "nt":
+        # subprocess.BELOW_NORMAL_PRIORITY_CLASS == 0x4000
+        return {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS}
+    return {"preexec_fn": lambda: os.nice(10)}
 
 
 def _find_free_port() -> int:
@@ -232,13 +313,36 @@ class AppRuntime:
         legitimate for old-mode workspaces with no backend.py (pure
         frontend served by `/api/outputs/.../serve/`); the runtime still
         exists so the Terminal pane can host `[FRONTEND]` lines.
+
+        New-mode spawns are serialized through the module-level
+        `_vite_boot_lock` (see comment at the lock declaration) so a
+        burst of "create 3 apps in 5 seconds" doesn't trigger 3 parallel
+        MUI pre-bundle runs each pegging a core.
         """
         async with self._lock:
             if self.running:
                 return True
 
             if self.is_new_mode:
-                return await self._start_new_mode()
+                # Acquire the module-level boot lock BEFORE the spawn so
+                # only one new-mode workspace is mid-bundle at a time.
+                # The lock is released by the bind-poll task the moment
+                # vite emits "frontend ready" (or its 180s timeout
+                # fires), which is the moment the next workspace can
+                # start its own vite without competing for the same
+                # CPU. See `_await_frontend_bind` for the release.
+                await _vite_boot_lock.acquire()
+                try:
+                    ok = await self._start_new_mode()
+                    if not ok:
+                        # Spawn failed before the bind-poll task was
+                        # created — release synchronously so we don't
+                        # wedge the next workspace.
+                        _vite_boot_lock.release()
+                    return ok
+                except Exception:
+                    _vite_boot_lock.release()
+                    raise
             return await self._start_old_mode()
 
     async def _start_new_mode(self) -> bool:
@@ -285,6 +389,7 @@ class AppRuntime:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.workspace_path,
                 env=env,
+                **_background_priority_kwargs(),
             )
         except Exception as e:
             logger.exception("failed to start new-mode runtime for %s", self.workspace_id)
@@ -309,44 +414,78 @@ class AppRuntime:
         something binds (Vite dev server) or we hit the timeout. Emits a
         `[runtime]` log line on success/failure so the Terminal pane
         shows the transition; flips `_frontend_ready` which the
-        `frontend_url` property reads."""
-        if not self.frontend_port:
-            return
-        port = self.frontend_port
-        deadline = asyncio.get_event_loop().time() + _FRONTEND_BIND_TIMEOUT_SECONDS
-        while asyncio.get_event_loop().time() < deadline:
-            # Stop polling if the process died — pointless to keep
-            # checking a port nothing will bind.
-            if self.process is None or self.process.returncode is not None:
+        `frontend_url` property reads.
+
+        Also responsible for releasing the module-level `_vite_boot_lock`
+        — every exit path (success, process death, hard timeout) MUST
+        release exactly once so the next queued workspace can start its
+        own vite spawn. A try/finally on the lock guarantees that even
+        an exception in the poll body doesn't strand the lock holding."""
+        # Track whether we've already released so the cleanup at the
+        # end doesn't double-release if a success path beat it.
+        lock_released = False
+
+        def _release_boot_lock() -> None:
+            nonlocal lock_released
+            if lock_released:
                 return
+            lock_released = True
             try:
-                # asyncio.open_connection is the non-blocking equivalent
-                # of socket.create_connection. 0.5s connect timeout to
-                # avoid hanging if the host's TCP stack is under load.
-                fut = asyncio.open_connection("127.0.0.1", port)
-                reader, writer = await asyncio.wait_for(fut, timeout=0.5)
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except Exception:
-                    pass
-                self._frontend_ready = True
-                self._broadcast(LogLine(
-                    "runtime",
-                    f"[runtime] frontend ready at http://127.0.0.1:{port}/",
-                ))
-                return
-            except (OSError, asyncio.TimeoutError):
+                _vite_boot_lock.release()
+            except RuntimeError:
+                # Lock already released (e.g. start() failure path
+                # released synchronously before spawning the poll task).
                 pass
-            await asyncio.sleep(_FRONTEND_BIND_POLL_INTERVAL)
-        # Timed out — keep the runtime up (Terminal might show useful
-        # errors) but surface why the preview never appeared.
-        self._broadcast(LogLine(
-            "runtime",
-            f"[runtime] frontend did NOT bind on port {port} after "
-            f"{_FRONTEND_BIND_TIMEOUT_SECONDS}s — check the Terminal "
-            f"for npm/vite errors.",
-        ))
+
+        try:
+            if not self.frontend_port:
+                return
+            port = self.frontend_port
+            deadline = asyncio.get_event_loop().time() + _FRONTEND_BIND_TIMEOUT_SECONDS
+            while asyncio.get_event_loop().time() < deadline:
+                # Stop polling if the process died — pointless to keep
+                # checking a port nothing will bind.
+                if self.process is None or self.process.returncode is not None:
+                    return
+                try:
+                    # asyncio.open_connection is the non-blocking equivalent
+                    # of socket.create_connection. 0.5s connect timeout to
+                    # avoid hanging if the host's TCP stack is under load.
+                    fut = asyncio.open_connection("127.0.0.1", port)
+                    reader, writer = await asyncio.wait_for(fut, timeout=0.5)
+                    writer.close()
+                    try:
+                        await writer.wait_closed()
+                    except Exception:
+                        pass
+                    self._frontend_ready = True
+                    self._broadcast(LogLine(
+                        "runtime",
+                        f"[runtime] frontend ready at http://127.0.0.1:{port}/",
+                    ))
+                    # Release the vite-boot mutex the INSTANT vite is
+                    # ready — the next queued workspace can start its
+                    # own bundle now even though we'll keep streaming
+                    # logs for this one.
+                    _release_boot_lock()
+                    return
+                except (OSError, asyncio.TimeoutError):
+                    pass
+                await asyncio.sleep(_FRONTEND_BIND_POLL_INTERVAL)
+            # Timed out — keep the runtime up (Terminal might show useful
+            # errors) but surface why the preview never appeared.
+            self._broadcast(LogLine(
+                "runtime",
+                f"[runtime] frontend did NOT bind on port {port} after "
+                f"{_FRONTEND_BIND_TIMEOUT_SECONDS}s — check the Terminal "
+                f"for npm/vite errors.",
+            ))
+        finally:
+            # Catches process-death return, timeout fall-through, and
+            # any exception in the poll body. _release_boot_lock is
+            # idempotent so this is safe even after the success path
+            # already released.
+            _release_boot_lock()
 
     async def _start_old_mode(self) -> bool:
         if not self.has_backend_file:
@@ -366,6 +505,7 @@ class AppRuntime:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.workspace_path,
                 env=env,
+                **_background_priority_kwargs(),
             )
         except Exception as e:
             logger.exception("failed to start backend for %s", self.workspace_id)
@@ -490,6 +630,10 @@ class AppRuntimeManager:
 
     async def attach(self, workspace_id: str, workspace_path: str) -> AppRuntime:
         revived = False
+        # Defined here so every code path below leaves it bound — the
+        # revive-idle branch used to skip the assignment, leaving the
+        # post-lock `if dead is not None:` check throwing UnboundLocalError.
+        dead: Optional[AppRuntime] = None
         async with self._lock:
             rt = self.runtimes.get(workspace_id)
             if rt is None:
@@ -501,14 +645,15 @@ class AppRuntimeManager:
                     rt.workspace_path = workspace_path
                     self.runtimes[workspace_id] = rt
                     revived = True
+                    # SIGCONT the process tree if A2 had it paused while
+                    # idle. Pair with the SIGSTOP in detach() below.
+                    _resume_process_tree(rt.process)
                 else:
                     if idle_rt is not None:
                         # Stale idle entry — process died while idling.
                         # Drop and spawn a fresh one below; old one
                         # gets stopped outside the lock.
                         dead = idle_rt
-                    else:
-                        dead = None
                     rt = AppRuntime(workspace_id, workspace_path)
                     self.runtimes[workspace_id] = rt
             else:
@@ -517,7 +662,6 @@ class AppRuntimeManager:
                 # folder), trust the latest caller — they have the
                 # current truth.
                 rt.workspace_path = workspace_path
-                dead = None
             self._attached[workspace_id] = self._attached.get(workspace_id, 0) + 1
         if not revived and not rt.running:
             await rt.start()
@@ -542,14 +686,21 @@ class AppRuntimeManager:
             if rt is None:
                 return
             # If the process is already dead, no point keeping it
-            # around — just clean up. Otherwise move to the LRU.
+            # around — just clean up. Otherwise move to the LRU AND
+            # SIGSTOP the process tree so it consumes 0% CPU while
+            # idle. The matching SIGCONT lives in attach() above.
             if not rt.running:
                 to_reap.append(rt)
             else:
                 self._idle_lru[workspace_id] = rt
                 self._idle_lru.move_to_end(workspace_id)
+                _suspend_process_tree(rt.process)
                 while len(self._idle_lru) > _MAX_IDLE_RUNTIMES:
                     _, old_rt = self._idle_lru.popitem(last=False)
+                    # Reaping a stopped process: SIGCONT first so the
+                    # SIGTERM in stop() can be delivered cleanly (a
+                    # SIGSTOP'd process can't run its own shutdown).
+                    _resume_process_tree(old_rt.process)
                     to_reap.append(old_rt)
             to_idle = rt if rt.running else None
 

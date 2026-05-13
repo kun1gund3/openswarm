@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 import threading
 
 logger = logging.getLogger(__name__)
@@ -155,19 +156,82 @@ _warm_cache_lock = threading.Lock()
 _warm_cache_thread: threading.Thread | None = None
 
 
-def _warm_cache_dir() -> str:
-    """Path the warm node_modules lives under. Hashed by package.json so
-    upgrades automatically force a re-populate."""
+# Pre-built node_modules archive bundled with packaged releases. Generated
+# by `scripts/build-template-archive.sh` and shipped at this path inside
+# the app's resources. When present (and tagged with the current
+# package.json sha), extract instead of running npm — decompression is
+# ~3 s vs ~22 s for the live install. Stale archives (package.json bumped
+# but archive not rebuilt) are silently ignored, so the live-install
+# fallback always wins on correctness.
+_BUNDLED_ARCHIVE_DIR = os.path.join(
+    os.path.dirname(__file__), "webapp_template_cache"
+)
+
+
+def _bundled_archive_path_for(digest: str) -> str:
+    """Sha-tagged archive path so a stale archive from a prior template
+    version is automatically skipped instead of overwriting the cache with
+    out-of-date modules."""
+    return os.path.join(_BUNDLED_ARCHIVE_DIR, f"node_modules.{digest}.tar.gz")
+
+
+def _try_extract_bundled_archive(cache_dir: str, digest: str) -> bool:
+    """Unpack the sha-tagged bundled archive into `cache_dir` if one
+    exists for the current template digest. Returns True on success,
+    False to signal the caller should fall back to a live `npm install`.
+    The archive is built from the same package.json + package-lock.json
+    sha so the extracted tree is byte-equivalent to `npm ci`."""
+    archive_path = _bundled_archive_path_for(digest)
+    if not os.path.exists(archive_path):
+        return False
+    try:
+        logger.info(
+            "webapp-template: unpacking bundled warm-cache archive %s",
+            archive_path,
+        )
+        os.makedirs(cache_dir, exist_ok=True)
+        # Archive root is `node_modules/`; extracting into cache_dir places
+        # it at the expected path. tarfile uses zlib internally for .gz —
+        # no extra dep needed.
+        with tarfile.open(archive_path, "r:gz") as tar:
+            tar.extractall(cache_dir)
+        cache_modules = os.path.join(cache_dir, "node_modules")
+        if os.path.isdir(cache_modules):
+            return True
+        logger.warning(
+            "webapp-template: bundled archive extracted but no node_modules/ "
+            "directory at %s; falling back to npm install",
+            cache_modules,
+        )
+        return False
+    except Exception as exc:
+        logger.warning(
+            "webapp-template: bundled-archive extract failed (%s); "
+            "falling back to npm install",
+            exc,
+        )
+        return False
+
+
+def _warm_cache_digest() -> str:
+    """Sha of the template's frontend/package.json — used as the cache
+    key + the bundled-archive filename suffix so a package.json bump
+    invalidates both at once."""
     pkg_path = os.path.join(WEBAPP_TEMPLATE_DIR, "frontend", "package.json")
     try:
         with open(pkg_path, "rb") as fh:
-            digest = hashlib.sha256(fh.read()).hexdigest()[:12]
+            return hashlib.sha256(fh.read()).hexdigest()[:12]
     except OSError:
-        digest = "fallback"
+        return "fallback"
+
+
+def _warm_cache_dir() -> str:
+    """Path the warm node_modules lives under. Hashed by package.json so
+    upgrades automatically force a re-populate."""
     base = os.environ.get("OPENSWARM_WEBAPP_CACHE_DIR") or os.path.expanduser(
         "~/.openswarm/cache/webapp_template_node_modules"
     )
-    return os.path.join(base, digest)
+    return os.path.join(base, _warm_cache_digest())
 
 
 def _ensure_warm_cache() -> str | None:
@@ -183,6 +247,13 @@ def _ensure_warm_cache() -> str | None:
 
     with _warm_cache_lock:
         if os.path.isdir(cache_modules):
+            return cache_modules
+        # Fast path: pre-built archive shipped inside the release. The
+        # build script generates this so users hitting OpenSwarm for the
+        # first time skip the ~22 s live `npm install`. Falls through on
+        # any failure so dev installs (no archive) keep working.
+        if _try_extract_bundled_archive(cache_dir, _warm_cache_digest()):
+            logger.info("webapp-template: warm cache ready from bundled archive")
             return cache_modules
         try:
             os.makedirs(cache_dir, exist_ok=True)

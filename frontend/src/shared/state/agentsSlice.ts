@@ -305,8 +305,17 @@ export interface LaunchAndSendPayload {
 
 export const fetchSession = createAsyncThunk(
   'agents/fetchSession',
-  async (sessionId: string) => {
+  async (sessionId: string, { rejectWithValue }) => {
     const res = await fetch(`${AGENTS_API}/sessions/${sessionId}`);
+    if (!res.ok) {
+      // 404 is the common case: AgentChat is rehydrating from a URL hash
+      // that points at a session the user deleted (or that never made it
+      // to disk after a crash). Surface a structured rejection so the
+      // .rejected reducer can purge the stale id from `state.sessions`
+      // instead of leaving it as a phantom entry that the next mount
+      // will re-fetch right back into a 404.
+      return rejectWithValue({ sessionId, status: res.status });
+    }
     const session = await res.json();
     return session as AgentSession;
   }
@@ -1276,6 +1285,25 @@ const agentsSlice = createSlice({
           streamingMessage: existing?.streamingMessage ?? null,
           tool_group_meta: session.tool_group_meta ?? existing?.tool_group_meta ?? {},
         };
+      })
+      .addCase(fetchSession.rejected, (state, action) => {
+        // Stale-id cleanup: if the backend returned 404, the session no
+        // longer exists — strip it from state so AgentChat can short-
+        // circuit to a "session not found" view instead of looping the
+        // same dead fetch on every remount. Also clears activeSessionId
+        // if it was pointing at the dead id, so the dashboard doesn't
+        // keep highlighting a ghost.
+        const payload = action.payload as { sessionId?: string; status?: number } | undefined;
+        const sessionId = payload?.sessionId;
+        if (!sessionId) return;
+        if (payload?.status === 404 || payload?.status === 410) {
+          delete state.sessions[sessionId];
+          if (state.activeSessionId === sessionId) {
+            state.activeSessionId = null;
+          }
+          state.expandedSessionIds = state.expandedSessionIds.filter((id) => id !== sessionId);
+          state.trackedNotificationIds = state.trackedNotificationIds.filter((id) => id !== sessionId);
+        }
       })
       .addCase(fetchBrowserAgentChildren.fulfilled, (state, action) => {
         for (const session of action.payload) {

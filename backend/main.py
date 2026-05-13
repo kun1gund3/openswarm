@@ -85,6 +85,14 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Every cross-origin POST from the Electron renderer (file:// → http://localhost:8324)
+    # carries Authorization: Bearer, which CORS classifies as non-simple and
+    # forces a preflight OPTIONS before EACH POST. With no max_age the browser
+    # re-preflights on a tight schedule (~5 s in Chromium); under heavy
+    # interaction we observed a 1:1 OPTIONS-to-POST ratio in the dev log,
+    # doubling roundtrip count for no reason. Caching the preflight result
+    # for 10 minutes drops that to one OPTIONS per ~600 POSTs.
+    max_age=600,
 )
 
 
@@ -266,8 +274,19 @@ async def websocket_runtime_logs(websocket: WebSocket, workspace_id: str):
     rt = runtime_manager.get(workspace_id)
     if rt is None:
         # No active runtime — surface that to the client and close. The
-        # frontend will call /runtime/start and reconnect.
+        # frontend will call /runtime/start and reconnect. Also emit a
+        # status frame with is_new_mode (computed from disk) so the
+        # preview pane shows the "starting preview…" placeholder for
+        # webapp_template workspaces instead of falling back to the
+        # legacy /serve/index.html URL (which 404s in new-mode).
         try:
+            from backend.apps.outputs.outputs import _runtime_status_payload
+            status = _runtime_status_payload(workspace_id)
+            await websocket.send_text(json.dumps({
+                "event": "runtime:status",
+                "workspace_id": workspace_id,
+                "data": status,
+            }))
             await websocket.send_text(json.dumps({
                 "event": "runtime:not_attached",
                 "workspace_id": workspace_id,

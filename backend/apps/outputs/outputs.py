@@ -506,8 +506,17 @@ async def seed_workspace(body: WorkspaceSeedRequest):
 
 def _runtime_status_payload(workspace_id: str) -> dict:
     from backend.apps.outputs.runtime import manager as runtime_manager
+    from backend.apps.outputs.runtime import _is_new_mode
     rt = runtime_manager.get(workspace_id)
     if not rt:
+        # Even without a live runtime, the editor needs is_new_mode to
+        # decide whether the preview pane should fall back to the legacy
+        # /serve/index.html URL (old-mode flat workspaces) or show the
+        # "starting preview…" placeholder (new-mode webapp_template).
+        # Compute from disk so a failed runtime/start still gives the
+        # client the right hint instead of dumping it onto a 404.
+        folder = os.path.join(WORKSPACE_DIR, workspace_id)
+        is_new = _is_new_mode(folder) if os.path.isdir(folder) else False
         return {
             "running": False,
             "port": None,
@@ -515,7 +524,7 @@ def _runtime_status_payload(workspace_id: str) -> dict:
             "backend_url": None,
             "frontend_port": None,
             "frontend_url": None,
-            "is_new_mode": False,
+            "is_new_mode": is_new,
         }
     return {
         "running": rt.running,

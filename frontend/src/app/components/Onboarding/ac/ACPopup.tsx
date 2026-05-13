@@ -68,11 +68,22 @@ const ACPopup: React.FC<Props> = ({ text, offset = { x: 0, y: 14 } }) => {
   // Use chained setTimeout (not setInterval) so we can vary the delay
   // per character — punctuation gets an extra beat, mimicking the
   // pacing of Pokémon-style dialog boxes where sentences "land."
+  //
+  // Diagnostic popups (anything containing the literal `[debug]`
+  // marker) skip streaming entirely. The recovery popup that fires on
+  // step failure carries a `[debug] <error message>` suffix so the
+  // user can see WHY a step bailed without opening DevTools — but at
+  // 30 ms/char + 210 ms per punctuation, the suffix takes the full
+  // 14 s popup duration to even start rendering, so by the time the
+  // user reads it the popup is already gone. Instant-render for these
+  // means the diagnostic appears immediately.
+  const isDebugPopup = text.includes('[debug]');
+  const skipStream = isDebugPopup || text.length < STREAM_MIN_CHARS;
   const [streamCount, setStreamCount] = useState<number>(
-    text.length < STREAM_MIN_CHARS ? text.length : 0,
+    skipStream ? text.length : 0,
   );
   useEffect(() => {
-    if (text.length < STREAM_MIN_CHARS) {
+    if (skipStream) {
       setStreamCount(text.length);
       return;
     }
@@ -98,7 +109,7 @@ const ACPopup: React.FC<Props> = ({ text, offset = { x: 0, y: 14 } }) => {
     return () => {
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [text]);
+  }, [text, skipStream]);
 
   useLayoutEffect(() => {
     const el = ref.current;

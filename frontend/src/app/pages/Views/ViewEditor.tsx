@@ -465,9 +465,37 @@ const ViewEditor: React.FC<Props> = ({ output }) => {
           // Replace /apps/new in the URL with /apps/{output_id} so a
           // reload (or back-button return) lands back on the same
           // workspace instead of spinning up yet another fresh seed.
-          // Use replace so /apps/new doesn't pile up in history.
+          //
+          // CRITICAL: bypass React Router (`navigate()`) and use the
+          // raw `window.history.replaceState` instead. Views.tsx
+          // renders <ViewEditor key={editingOutput?.id ?? 'new'} />
+          // — a React-Router-driven path change from /apps/new to
+          // /apps/<id> would flip that key, React would UNMOUNT this
+          // ViewEditor and MOUNT a new one, AgentChat's chat-input DOM
+          // node would get a new identity, and the onboarding wizard's
+          // type_into would silently fire into the now-detached old
+          // input (no text lands, hasContent stays false, send button
+          // never renders, wizard burns 15 s on waitForSelector and
+          // throws into the recovery popup). window.history.replaceState
+          // changes the URL without triggering Views' re-render, so
+          // ViewEditor stays mounted and the chat-input the wizard
+          // already found is the same one it types into. On hard
+          // reload React Router reads the live URL fresh, so the
+          // back-button / reload behavior is preserved.
           if (window.location.hash.includes('/apps/new')) {
-            navigate(`/apps/${data.output_id}`, { replace: true });
+            const newHash = window.location.hash.replace(
+              '/apps/new',
+              `/apps/${data.output_id}`,
+            );
+            try {
+              window.history.replaceState(null, '', newHash);
+            } catch {
+              // Fallback to React Router nav if the history API rejects
+              // (extremely unusual; mostly defensive). Accepts the
+              // remount cost in that edge case rather than dropping
+              // the URL update entirely.
+              navigate(`/apps/${data.output_id}`, { replace: true });
+            }
           }
         }
         const action = dispatch(createDraftSession({
@@ -576,11 +604,38 @@ const ViewEditor: React.FC<Props> = ({ output }) => {
 
   useEffect(() => {
     if (!workspaceId) return;
-    pollWorkspace();
     const interval = isAgentActive ? POLL_INTERVAL_ACTIVE_MS : POLL_INTERVAL_IDLE_MS;
-    pollRef.current = setInterval(pollWorkspace, interval);
+
+    // Visibility-gate the poll loop. When the App Builder tab is
+    // hidden (user navigated to Dashboard / Skills / Actions / a
+    // different Electron window), there's no UI to update — but the
+    // interval would otherwise keep hitting `/api/outputs/workspace`
+    // every 2s, blocking the foreground backend's other endpoints.
+    // On `hidden` we clear the timer entirely; on `visible` we fire
+    // one immediate poll (to catch up on whatever the agent wrote
+    // while we were away) then restart the interval. Reuses the
+    // existing isAgentActive-driven cadence.
+    const startPoll = () => {
+      if (pollRef.current) return;
+      pollWorkspace();
+      pollRef.current = setInterval(pollWorkspace, interval);
+    };
+    const stopPoll = () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') startPoll();
+      else stopPoll();
+    };
+
+    if (document.visibilityState === 'visible') startPoll();
+    document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      stopPoll();
     };
   }, [workspaceId, pollWorkspace, isAgentActive]);
 
@@ -783,8 +838,29 @@ const ViewEditor: React.FC<Props> = ({ output }) => {
   // 404s — new-mode workspaces have no `index.html` at root, only
   // `frontend/index.html` reachable via Vite).
   const [isNewModeRuntime, setIsNewModeRuntime] = useState(false);
+  // Has runtime/start been fired for this workspace yet? Used by the
+  // tab-gated lifecycle below so we only POST start the FIRST time the
+  // user lands on (or switches to) Preview/Terminal. Switching between
+  // tabs after that is a no-op — the runtime is already up and the
+  // WS is already streaming. Reset when workspaceId changes so a new
+  // workspace gets its own one-shot.
+  const runtimeStartedRef = useRef(false);
+  useEffect(() => {
+    runtimeStartedRef.current = false;
+  }, [workspaceId]);
+
   useEffect(() => {
     if (!workspaceId) return;
+    // Defer the workspace runtime spawn until the user actually wants
+    // to see/hear from it. Code tab is pure editor — no need to pay
+    // the ~1-2s vite + uvicorn cold-start until they click Preview or
+    // Terminal. After the first entry, the runtime stays up (LRU pools
+    // it on unmount), so subsequent tab flips are free.
+    const wantsRuntime = activeTab === TAB_PREVIEW || activeTab === TAB_TERMINAL;
+    if (!wantsRuntime && !runtimeStartedRef.current) return;
+    if (runtimeStartedRef.current) return;
+    runtimeStartedRef.current = true;
+
     let cancelled = false;
     let ws: WebSocket | null = null;
     setFrontendUrl(null); // reset when workspace changes
@@ -846,7 +922,7 @@ const ViewEditor: React.FC<Props> = ({ output }) => {
         headers,
       }).catch(() => {});
     };
-  }, [workspaceId, appendTerminalLine]);
+  }, [workspaceId, appendTerminalLine, activeTab]);
 
   // Preview URL: prefer the new-mode Vite dev server when the runtime
   // reports one; otherwise fall back to the legacy serve endpoint.

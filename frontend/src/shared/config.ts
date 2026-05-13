@@ -49,6 +49,23 @@ export function ensureAuthToken(): Promise<string> {
 // Covers the analytics, settings, agents, dashboards, etc. fetches.
 // Only applies to requests that target our own API_BASE — pass-through
 // for every other URL (3rd-party APIs, asset CDNs, etc.).
+//
+// Layered on top of the auth-injection: a tiny in-flight dedupe + 1s
+// success cache for GETs. The onboarding flow + dashboard load fire the
+// same `GET /api/agents/sessions/<id>` / `GET /api/skills/list` /
+// `GET /api/skills/workspace/<id>` two-to-five times in quick
+// succession when components mount near-simultaneously — without
+// dedupe we paid a full roundtrip every time. With this in place the
+// second-through-Nth call inside a 1 s window either piggybacks on
+// the in-flight promise OR reads a freshly-cached Response. Cache is
+// keyed by `METHOD URL`, scoped to GET only (mutations always fall
+// through), and a Response.clone() per consumer keeps each caller's
+// body stream independent. Non-2xx responses are NOT cached so a
+// transient 5xx can't poison the next click.
+const _inflightFetches = new Map<string, Promise<Response>>();
+const _cachedFetches = new Map<string, { resp: Response; expiresAt: number }>();
+const _GET_CACHE_TTL_MS = 1000;
+
 function _installAuthFetchInterceptor() {
   if ((window as any).__OPENSWARM_FETCH_PATCHED__) return;
   (window as any).__OPENSWARM_FETCH_PATCHED__ = true;
@@ -63,16 +80,60 @@ function _installAuthFetchInterceptor() {
 
       // Don't override an explicit Authorization the caller already set.
       const existingHeaders = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-      if (existingHeaders.has('Authorization') || existingHeaders.has('authorization')) {
-        return originalFetch(input, init);
+      const callerSetAuth = existingHeaders.has('Authorization') || existingHeaders.has('authorization');
+
+      let finalInit: RequestInit | undefined = init;
+      if (!callerSetAuth) {
+        const token = _authTokenCache || (await ensureAuthToken());
+        if (token) {
+          existingHeaders.set('Authorization', `Bearer ${token}`);
+          finalInit = { ...(init ?? {}), headers: existingHeaders };
+        }
       }
 
-      const token = _authTokenCache || (await ensureAuthToken());
-      if (!token) return originalFetch(input, init);
+      const method = (
+        finalInit?.method
+        ?? (input instanceof Request ? input.method : 'GET')
+      ).toUpperCase();
 
-      existingHeaders.set('Authorization', `Bearer ${token}`);
-      const newInit: RequestInit = { ...(init ?? {}), headers: existingHeaders };
-      return originalFetch(input, newInit);
+      // Only GET is safe to dedupe + cache. POST/PUT/PATCH/DELETE have
+      // side effects — collapsing two intentional calls (e.g. user
+      // double-clicked Send) would be wrong, so we always pass through.
+      if (method !== 'GET') {
+        return originalFetch(input, finalInit);
+      }
+
+      const cacheKey = `GET ${url}`;
+
+      const cached = _cachedFetches.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return cached.resp.clone();
+      } else if (cached) {
+        _cachedFetches.delete(cacheKey);
+      }
+
+      const inflight = _inflightFetches.get(cacheKey);
+      if (inflight) {
+        const resp = await inflight;
+        return resp.clone();
+      }
+
+      const promise = originalFetch(input, finalInit).then((resp) => {
+        if (resp.ok) {
+          _cachedFetches.set(cacheKey, {
+            resp: resp.clone(),
+            expiresAt: Date.now() + _GET_CACHE_TTL_MS,
+          });
+        }
+        return resp;
+      });
+      _inflightFetches.set(cacheKey, promise);
+      try {
+        const resp = await promise;
+        return resp.clone();
+      } finally {
+        _inflightFetches.delete(cacheKey);
+      }
     } catch {
       return originalFetch(input, init);
     }

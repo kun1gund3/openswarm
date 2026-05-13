@@ -8,10 +8,33 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
     set +a
 fi
 
+# Recursively SIGTERM a pid + all of its descendants. We track FRONTEND_PID
+# and BACKEND_PID below, but each of those is a `bash` wrapper that has its
+# own grandchildren (vite, uvicorn, npm). A flat `kill $FRONTEND_PID` leaves
+# the grandchildren alive holding their ports until the OS reaps them
+# minutes later — visible to the user as port-already-in-use the next time
+# they hit the App Builder.
+kill_tree() {
+    local pid=$1 sig=${2:-TERM}
+    local children
+    children=$(pgrep -P "$pid" 2>/dev/null)
+    for child in $children; do
+        kill_tree "$child" "$sig"
+    done
+    kill -"$sig" "$pid" 2>/dev/null
+}
+
+# Previously this was `kill 0`, which SIGTERMs the entire process group.
+# That's fast but propagates UP into OpenSwarm — when this workspace's
+# cleanup fired on ViewEditor unmount or runtime/stop, it tore down the
+# OpenSwarm dev stack (Terminated: 15) and left port 8324 stuck. Now we
+# only kill our own tracked subtree, which keeps containment without
+# requiring an OS-level session wall.
 cleanup() {
     echo ""
     echo "Shutting down all processes..."
-    kill 0 2>/dev/null
+    [[ -n "${FRONTEND_PID:-}" ]] && kill_tree "$FRONTEND_PID" TERM
+    [[ -n "${BACKEND_PID:-}" ]] && kill_tree "$BACKEND_PID" TERM
     wait 2>/dev/null
 }
 trap cleanup EXIT
