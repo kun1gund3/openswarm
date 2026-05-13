@@ -1124,6 +1124,60 @@ class AgentManager:
         def _default_for(tool_name: str) -> str:
             return _DEFAULTS.get(tool_name, "always_allow")
 
+        # Path patterns that flip Write/Edit/NotebookEdit from always_allow
+        # to ask regardless of the user's base permission. Targets the
+        # narrow set of files a prompt-injected agent would use to exfil
+        # or persist (SSH keys, shell rc files, env files, cloud creds,
+        # system dirs). Normal in-project / in-workspace / in-Downloads
+        # edits never match — keeping the prompt-fatigue surface tiny.
+        import fnmatch as _fnmatch
+
+        _SENSITIVE_PATH_PATTERNS = (
+            "*/.ssh", "*/.ssh/*",
+            "*/.aws/*", "*/.config/gcloud/*", "*/.kube/*",
+            "*/.gnupg/*", "*/.docker/config*",
+            "*/.zshrc", "*/.bashrc", "*/.bash_profile",
+            "*/.profile", "*/.zprofile", "*/.zshenv",
+            "*/.gitconfig", "*/.npmrc", "*/.pypirc", "*/.netrc",
+            "*/.env", "*/.env.*", "*.env",
+            "*/Library/Application Support/*",  # macOS credential stores
+            "*/Library/Keychains/*",
+            "/etc/*", "/private/etc/*", "/System/*",
+            "/usr/local/etc/*",
+        )
+
+        def _is_sensitive_write_path(file_path: str) -> bool:
+            if not file_path or not isinstance(file_path, str):
+                return False
+            try:
+                norm = os.path.normpath(os.path.expanduser(file_path))
+            except Exception:
+                return False
+            for pat in _SENSITIVE_PATH_PATTERNS:
+                if _fnmatch.fnmatch(norm, pat):
+                    return True
+            return False
+
+        _PATH_GATED_TOOLS = ("Write", "Edit", "NotebookEdit")
+
+        def _extract_target_path(tool_name: str, tool_input) -> str:
+            if not isinstance(tool_input, dict):
+                return ""
+            if tool_name == "NotebookEdit":
+                return str(tool_input.get("notebook_path") or "")
+            return str(tool_input.get("file_path") or "")
+
+        def _maybe_override_policy(policy: str, tool_name: str, tool_input) -> str:
+            """Flip a permissive policy to 'ask' when the target path is
+            sensitive. Defense in depth: even if the user has Write set to
+            always_allow for productivity, a prompt-injected agent writing
+            to ~/.ssh/authorized_keys or ~/.zshrc gets surfaced for review."""
+            if policy != "always_allow" or tool_name not in _PATH_GATED_TOOLS:
+                return policy
+            if _is_sensitive_write_path(_extract_target_path(tool_name, tool_input)):
+                return "ask"
+            return policy
+
         def _get_effective_policy(tool_name: str) -> str:
             """Return 'always_allow', 'deny', or 'ask' for any tool."""
             if tool_name in _builtin_perms:
@@ -1196,7 +1250,9 @@ class AgentManager:
 
         async def can_use_tool(tool_name, input_data, context):
             if tool_name != "AskUserQuestion":
-                policy = _get_effective_policy(tool_name)
+                policy = _maybe_override_policy(
+                    _get_effective_policy(tool_name), tool_name, input_data
+                )
                 if policy == "always_allow":
                     return PermissionResultAllow(updated_input=input_data)
                 if policy == "deny":
@@ -1218,7 +1274,10 @@ class AgentManager:
             hook_event = input_data.get("hook_event_name", "PreToolUse")
 
             if tool_name and tool_name != "AskUserQuestion":
-                policy = _get_effective_policy(tool_name)
+                tool_input = input_data.get("tool_input", {})
+                policy = _maybe_override_policy(
+                    _get_effective_policy(tool_name), tool_name, tool_input
+                )
 
                 if policy == "deny":
                     return {
@@ -1230,7 +1289,6 @@ class AgentManager:
                     }
 
                 if policy == "ask":
-                    tool_input = input_data.get("tool_input", {})
                     decision = await _request_user_approval(tool_name, tool_input)
 
                     if decision.get("behavior") == "allow":

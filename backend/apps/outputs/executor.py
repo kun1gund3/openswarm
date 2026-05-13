@@ -96,14 +96,48 @@ def _validate_code_safety(code: str) -> None:
         raise UnsafeCodeError(warnings[0])
 
 
-def _minimal_env() -> dict:
-    """Build a stripped-down env for the executor subprocess.
+# Env vars we always scrub from the subprocess, regardless of strict-vs-force.
+# These are the keys an attacker would actually want — install token, provider
+# API keys, cloud credentials. Everything else is local-machine convenience.
+_SCRUBBED_ENV_KEYS = frozenset({
+    "OPENSWARM_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "STRIPE_API_KEY",
+    "STRIPE_SECRET_KEY",
+    "GITHUB_TOKEN",
+})
 
-    Drops PATH, OPENSWARM_AUTH_TOKEN, OPENAI_API_KEY, ANTHROPIC_API_KEY, and
-    every other inherited credential. Keeps only what Python itself needs to
-    boot on each platform — on Windows that's SYSTEMROOT et al, on POSIX
-    nothing is strictly required.
+
+def _minimal_env(force: bool = False) -> dict:
+    """Build the env for the executor subprocess.
+
+    Strict mode (force=False): only language essentials. AST-validated code
+    is data-shaping only — `import os` and `open()` are blocked, so the
+    subprocess can't read env vars or expand `~` anyway. Minimal env is
+    correct here.
+
+    Force mode (force=True): user has explicitly approved unsafe imports
+    via the HITL preview. They expect the code to behave like a normal
+    Python process — read HOME, find files, etc. Inherit the real env
+    minus credentials, so an `open(os.path.expanduser("~/data.csv"))`
+    actually works instead of silently misbehaving.
+
+    Both modes scrub _SCRUBBED_ENV_KEYS so even force-mode code never
+    sees the install token or provider API keys.
     """
+    if force:
+        env = {k: v for k, v in os.environ.items() if k not in _SCRUBBED_ENV_KEYS}
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        return env
+
     env = {
         "PYTHONDONTWRITEBYTECODE": "1",
         "LANG": os.environ.get("LANG", "C.UTF-8"),
@@ -176,7 +210,7 @@ async def execute_backend_code(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=workdir,
-            env=_minimal_env(),
+            env=_minimal_env(force=skip_validation),
         )
 
         try:
