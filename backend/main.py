@@ -223,6 +223,7 @@ async def websocket_session(websocket: WebSocket, session_id: str):
                     "behavior": payload.get("behavior", "deny"),
                     "message": payload.get("message"),
                     "updated_input": payload.get("updated_input"),
+                    "trust_pattern": bool(payload.get("trust_pattern")),
                 })
             elif event == "agent:edit_message":
                 from backend.apps.agents.agent_manager import agent_manager
@@ -368,6 +369,7 @@ async def websocket_dashboard(websocket: WebSocket):
                     "behavior": payload.get("behavior", "deny"),
                     "message": payload.get("message"),
                     "updated_input": payload.get("updated_input"),
+                    "trust_pattern": bool(payload.get("trust_pattern")),
                 })
             elif event == "browser:result":
                 ws_manager.resolve_browser_command(
@@ -702,14 +704,10 @@ async def session_compact(session_id: str):
 
 @app.post("/api/agents/sessions/{session_id}/clear")
 async def session_clear(session_id: str):
-    """Reset a session to a fresh sdk_session_id (Phase 2 /clear slash cmd).
-
-    Preserves session.messages (so the chat UI keeps the visible history)
-    but clears the SDK-side conversation by minting a new sdk_session_id.
-    Also drops active_mcps so the user starts fresh.
-    """
+    """Wipe the session's UI history AND its SDK convo state (/clear slash cmd, Reset history button)."""
     from backend.apps.agents.agent_manager import agent_manager
     from backend.apps.agents.ws_manager import ws_manager as _ws
+    from backend.apps.agents.models import MessageBranch
     session = agent_manager.sessions.get(session_id)
     if not session:
         return JSONResponse({"error": "session not found"}, status_code=404)
@@ -719,6 +717,11 @@ async def session_clear(session_id: str):
     session.tokens = {"input": 0, "output": 0}
     session.cost_usd = 0.0
     session.needs_fork = False
+    session.messages = []
+    session.pending_approvals = []
+    session.branches = {"main": MessageBranch(id="main")}
+    session.active_branch_id = "main"
+    session.tool_group_meta = {}
     await _ws.send_to_session(session_id, "agent:status", {
         "session_id": session_id,
         "status": session.status,
