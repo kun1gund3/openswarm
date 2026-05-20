@@ -26,10 +26,6 @@ import { useAppSelector } from '@/shared/hooks';
 import { ToolDefinition } from '@/shared/state/toolsSlice';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 
-// ---------------------------------------------------------------------------
-// Integration metadata (icons, colors) for known MCP servers
-// ---------------------------------------------------------------------------
-
 interface IntegrationMeta {
   label: string;
   color: string;
@@ -57,10 +53,6 @@ const INTEGRATION_META: Record<string, IntegrationMeta> = {
   'Reddit': { label: 'Reddit', color: '#FF4500', icon: RedditIcon },
 };
 
-// ---------------------------------------------------------------------------
-// MCP tool name parser
-// ---------------------------------------------------------------------------
-
 export interface ParsedTool {
   isMcp: boolean;
   serverSlug: string;
@@ -84,10 +76,6 @@ export function parseMcpToolName(rawName: string): ParsedTool {
 function sanitizeServerName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 }
-
-// ---------------------------------------------------------------------------
-// Look up MCP tool metadata from the Redux tools store
-// ---------------------------------------------------------------------------
 
 interface McpToolMeta {
   integration: IntegrationMeta | null;
@@ -119,10 +107,6 @@ export function useMcpToolMeta(parsed: ParsedTool): McpToolMeta {
   }, [parsed, toolItems]);
 }
 
-// ---------------------------------------------------------------------------
-// Smart input summary for MCP tools
-// ---------------------------------------------------------------------------
-
 function getMcpInputSummary(actionName: string, toolInput: Record<string, any>): string {
   const lower = actionName.toLowerCase();
 
@@ -131,7 +115,7 @@ function getMcpInputSummary(actionName: string, toolInput: Record<string, any>):
     const to = toolInput.to || toolInput.recipient || '';
     const subject = toolInput.subject || '';
     if (query) return `Search: "${query}"`;
-    if (to && subject) return `To ${to} — ${subject}`;
+    if (to && subject) return `To ${to}: ${subject}`;
     if (to) return `To ${to}`;
     if (subject) return `Subject: ${subject}`;
   }
@@ -139,7 +123,7 @@ function getMcpInputSummary(actionName: string, toolInput: Record<string, any>):
   if (lower.includes('calendar') || lower.includes('event') || lower.includes('freebusy')) {
     const summary = toolInput.summary || toolInput.title || toolInput.event_name || '';
     const start = toolInput.start || toolInput.start_time || toolInput.date || '';
-    if (summary && start) return `${summary} — ${start}`;
+    if (summary && start) return `${summary}: ${start}`;
     if (summary) return summary;
     if (start) return `Date: ${start}`;
   }
@@ -176,10 +160,6 @@ function getMcpInputSummary(actionName: string, toolInput: Record<string, any>):
 
   return '';
 }
-
-// ---------------------------------------------------------------------------
-// Shared components
-// ---------------------------------------------------------------------------
 
 interface Props {
   request: ApprovalRequest;
@@ -312,10 +292,6 @@ const ToolPreview: React.FC<ToolPreviewProps> = ({ request, tokens: c }) => {
     }
   }
 };
-
-// ---------------------------------------------------------------------------
-// QuestionForm (AskUserQuestion — unchanged)
-// ---------------------------------------------------------------------------
 
 function getOptionKey(opt: any): string {
   return opt.id || opt.value || opt.label || opt.text || String(opt);
@@ -583,10 +559,6 @@ export const QuestionForm: React.FC<QuestionFormProps> = ({ request, onApprove, 
   );
 };
 
-// ---------------------------------------------------------------------------
-// GenericApprovalBar — redesigned for MCP tools
-// ---------------------------------------------------------------------------
-
 const GenericApprovalBar: React.FC<Props> = ({ request, onApprove, onDeny }) => {
   const c = useClaudeTokens();
   const [denyMessage, setDenyMessage] = useState('');
@@ -755,7 +727,6 @@ const GenericApprovalBar: React.FC<Props> = ({ request, onApprove, onDeny }) => 
         overflow: 'hidden',
       }}
     >
-      {/* Header row */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, pt: 1.75, pb: 0.5 }}>
         <Box
           sx={{
@@ -809,7 +780,6 @@ const GenericApprovalBar: React.FC<Props> = ({ request, onApprove, onDeny }) => 
         </Box>
       </Box>
 
-      {/* Input summary / details */}
       <Box sx={{ px: 2, pt: 1, pb: 0.5 }}>
         {summary && (
           <Box
@@ -850,7 +820,6 @@ const GenericApprovalBar: React.FC<Props> = ({ request, onApprove, onDeny }) => 
         </Collapse>
       </Box>
 
-      {/* Deny reason input */}
       {showDenyInput && (
         <Box sx={{ px: 2, pb: 0.5 }}>
           <TextField
@@ -872,7 +841,6 @@ const GenericApprovalBar: React.FC<Props> = ({ request, onApprove, onDeny }) => 
         </Box>
       )}
 
-      {/* Action buttons */}
       <Box sx={{ display: 'flex', gap: 1, px: 2, pt: 1, pb: 1.75 }}>
         <Button
           variant="contained"
@@ -930,20 +898,12 @@ const GenericApprovalBar: React.FC<Props> = ({ request, onApprove, onDeny }) => 
   );
 };
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
 const ApprovalBar: React.FC<Props> = (props) => {
   if (props.request.tool_name === 'AskUserQuestion') {
     return <QuestionForm request={props.request} onApprove={props.onApprove} onDeny={props.onDeny} />;
   }
   return <GenericApprovalBar {...props} />;
 };
-
-// ---------------------------------------------------------------------------
-// BatchApprovalBar — grouped mass approve/deny when many approvals pending
-// ---------------------------------------------------------------------------
 
 interface ToolGroup {
   toolName: string;
@@ -1014,7 +974,6 @@ export const BatchApprovalBar: React.FC<BatchApprovalBarProps> = ({ requests, on
             overflow: 'hidden',
           }}
         >
-          {/* Global actions bar */}
           <Box
             sx={{
               display: 'flex',
@@ -1068,7 +1027,6 @@ export const BatchApprovalBar: React.FC<BatchApprovalBarProps> = ({ requests, on
             </Button>
           </Box>
 
-          {/* Per-group rows */}
           {groups.map((group) => (
             <GroupRow
               key={group.toolName}
@@ -1090,10 +1048,6 @@ export const BatchApprovalBar: React.FC<BatchApprovalBarProps> = ({ requests, on
     </Box>
   );
 };
-
-// ---------------------------------------------------------------------------
-// GroupRow — a single tool-name group within the batch bar
-// ---------------------------------------------------------------------------
 
 interface GroupRowProps {
   group: ToolGroup;

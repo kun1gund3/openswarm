@@ -174,7 +174,6 @@ const ToolGroupBubble: React.FC<Props> = React.memo(({ group, isSessionRunning =
           <Box
             sx={{
               borderTop: `0.5px solid ${c.border.medium}`,
-              // 140ms fade so rows don't pop in.
               '& > *': {
                 animation: 'toolRowFadeIn 140ms ease-out',
               },
