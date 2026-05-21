@@ -447,7 +447,7 @@ async function pickBackendPort() {
 }
 
 async function startBackend() {
-  backendPort = await pickBackendPort();
+  if (!backendPort) backendPort = await pickBackendPort();
 
   const pythonPath = getPythonPath();
   const backendDir = getResourcePath('backend');
@@ -581,6 +581,7 @@ async function startBackend() {
   // any browser on the machine could hit our localhost API and
   // impersonate the user. See backend/auth.py.
   await loadAuthToken();
+  markBackendReady();
 }
 
 // Per-install auth token read from <data-root>/auth.token (backend
@@ -588,6 +589,16 @@ async function startBackend() {
 // calls are fast. If reads fail initially (race with backend) we
 // retry a few times.
 let authToken = '';
+
+// Lazy-backend gate: renderer fetches block on this until backend is reachable AND auth token is loaded. Lets the main window open immediately while Python is still cold-starting on Windows.
+let backendReady = false;
+let _backendReadyResolve;
+const backendReadyPromise = new Promise((resolve) => { _backendReadyResolve = resolve; });
+function markBackendReady() {
+  if (backendReady) return;
+  backendReady = true;
+  _backendReadyResolve();
+}
 
 function getAuthTokenFilePath() {
   // Mirrors backend/config/paths.py. On macOS the file lives at
@@ -900,8 +911,14 @@ app.whenReady().then(async () => {
       backendPort = parseInt(process.env.OPENSWARM_PORT || '8324', 10);
       console.log(`Dev mode: using existing backend on port ${backendPort}`);
       emitSplashStatus('Connecting to dev backend…');
+      markBackendReady();
     } else {
-      await startBackend();
+      // Kick off backend without awaiting so the window can paint while Python is still cold-starting. Renderer fetches lazy-await markBackendReady() via the get-auth-token IPC; splash status updates still fire from inside startBackend.
+      backendPort = await pickBackendPort();
+      const _backendBoot = startBackend().catch((err) => {
+        console.error('[boot] backend startup failed:', err && err.message);
+        emitSplashStatus({ text: 'Backend failed to start', level: 'error', logs: recentBackendStderr.slice(-20).join('') });
+      });
     }
     emitSplashStatus('Almost ready…');
     createWindow();
@@ -919,9 +936,14 @@ app.whenReady().then(async () => {
     // Swap splash → main only once React has actually painted. ready-to-show
     // fires after the renderer's first frame, eliminating the white-flash
     // that would otherwise pop between splash close and React mount.
+    // Also gated on backendReady: with lazy backend, ready-to-show can fire while React is still showing null (SignInGateLoader returns null until settings load), so we'd show a blank window if we swapped early.
     if (mainWindow) {
       const swapToMain = () => {
         if (mainWindowReady || mainWindow.isDestroyed()) return;
+        if (!backendReady) {
+          backendReadyPromise.then(() => swapToMain()).catch(() => {});
+          return;
+        }
         mainWindowReady = true;
         try { mainWindow.show(); mainWindow.focus(); } catch (_) {}
         // Tiny delay so the OS gets a chance to bring main to front
@@ -941,7 +963,13 @@ app.whenReady().then(async () => {
       // sees the load error in the window itself.
       mainWindow.webContents.once('did-fail-load', (_e, errorCode, errorDescription, validatedURL) => {
         console.warn('[boot] mainWindow load failed:', errorCode, errorDescription, validatedURL);
-        if (isDev) swapToMain();
+        if (isDev) {
+          // Force-skip the backend gate so dev sees the error.
+          mainWindowReady = true;
+          try { mainWindow.show(); mainWindow.focus(); } catch (_) {}
+          if (splashWindow && !splashWindow.isDestroyed()) splashWindow.destroy();
+          splashWindow = null;
+        }
       });
     }
 
@@ -1294,7 +1322,9 @@ ipcMain.on('splash:action', (_event, action) => {
 });
 
 ipcMain.handle('get-backend-port', () => backendPort);
-ipcMain.handle('get-auth-token', () => {
+ipcMain.handle('get-auth-token', async () => {
+  // Wait for backend if it's still cold-starting; this is the lazy-backend gate that lets the window open while Python is warming up.
+  if (!backendReady) await backendReadyPromise;
   // Re-read the file every time. The backend rotates the token on each
   // start, and during dev hot-reload the cached value could go stale
   // while the renderer stays alive. Re-reading is cheap (small file,
