@@ -11,6 +11,7 @@ import os
 import httpx
 
 from .process import NINE_ROUTER_API, NINE_ROUTER_PORT, NINE_ROUTER_V1
+from backend.apps.oauth_state import _pending_oauth, _mark_oauth_completed
 
 logger = logging.getLogger(__name__)
 
@@ -108,38 +109,30 @@ async def _start_codex_callback_listener(timeout: float = 300.0) -> asyncio.base
                     code = (q.get("code") or [""])[0]
                     state = (q.get("state") or [""])[0]
                     if code and state:
-                        try:
-                            from backend.main import _pending_oauth, _mark_oauth_completed
-                        except Exception:
-                            _pending_oauth = None
-                            _mark_oauth_completed = None
-
-                        if _pending_oauth is not None:
-                            pending = _pending_oauth.pop(state, None)
-                            if pending:
-                                try:
-                                    await exchange_oauth(
-                                        pending["provider"],
-                                        code,
-                                        pending["redirect_uri"],
-                                        pending["code_verifier"],
-                                        state,
-                                    )
-                                    if _mark_oauth_completed is not None:
-                                        _mark_oauth_completed(state)
-                                    logger.info(
-                                        f"Codex callback: server-side exchange succeeded for state {state[:8]}..."
-                                    )
-                                except Exception as e:
-                                    # Put the pending entry back so the
-                                    # frontend's msgHandler retry via
-                                    # /agents/subscriptions/exchange still
-                                    # has a shot. Safe because we only popped
-                                    # it a moment ago.
-                                    _pending_oauth[state] = pending
-                                    logger.debug(
-                                        f"Codex callback: server-side exchange failed ({e}); leaving for frontend retry"
-                                    )
+                        pending = _pending_oauth.pop(state, None)
+                        if pending:
+                            try:
+                                await exchange_oauth(
+                                    pending["provider"],
+                                    code,
+                                    pending["redirect_uri"],
+                                    pending["code_verifier"],
+                                    state,
+                                )
+                                _mark_oauth_completed(state)
+                                logger.info(
+                                    f"Codex callback: server-side exchange succeeded for state {state[:8]}..."
+                                )
+                            except Exception as e:
+                                # Put the pending entry back so the
+                                # frontend's msgHandler retry via
+                                # /agents/subscriptions/exchange still
+                                # has a shot. Safe because we only popped
+                                # it a moment ago.
+                                _pending_oauth[state] = pending
+                                logger.debug(
+                                    f"Codex callback: server-side exchange failed ({e}); leaving for frontend retry"
+                                )
                 except Exception as e:
                     logger.debug(f"Codex callback listener pre-exchange error: {e}")
 
