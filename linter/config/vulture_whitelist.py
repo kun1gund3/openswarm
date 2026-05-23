@@ -48,7 +48,6 @@ requests_delta
 # This task is tooling-only and must not edit backend source, so these stay
 # whitelisted rather than deleted. They have zero call sites today; a future
 # non-additive cleanup pass should remove the definitions and these lines.
-_approx_tokens
 _summarize_message_block
 thinking_params_for
 _resolve_model

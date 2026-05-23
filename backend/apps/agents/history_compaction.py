@@ -62,14 +62,6 @@ def _build_history_prefix(messages) -> str:
     return "<prior_conversation>\n" + "\n".join(lines) + "\n</prior_conversation>"
 
 
-def _approx_tokens(text: str) -> int:
-    """Conservative chars/4 estimate. Used for the pre-send guard
-    and the compaction trigger when a precise count_tokens isn't
-    cheap (or the route isn't Anthropic). Errs slightly high so we
-    compact a touch earlier than strictly necessary."""
-    return max(1, len(text or "") // 4)
-
-
 def _summarize_message_block(messages: list) -> str:
     """Programmatic, no-LLM summary of a message slice. Mirrors the
     shape of browser_agent._summarize_messages: extracts the original

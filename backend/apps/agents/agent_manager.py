@@ -50,7 +50,6 @@ from backend.apps.agents.tool_catalog import (
 )
 from backend.apps.agents.aux_llm import _safe_resp_text
 from backend.apps.agents.history_compaction import (
-    _approx_tokens,
     _build_history_prefix,
     _get_branch_messages,
     _summarize_message_block,
