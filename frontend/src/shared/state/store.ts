@@ -15,7 +15,7 @@ import updateReducer from './updateSlice';
 import modelsReducer from './modelsSlice';
 import interactionReducer from './interactionSlice';
 import subscriptionsReducer from './subscriptionsSlice';
-import onboardingProgressReducer from '@/app/components/Onboarding/OnboardingProgressSlice';
+import onboardingProgressReducer from '@/shared/state/onboardingProgressSlice';
 
 export const store = configureStore({
   reducer: {

@@ -8,7 +8,7 @@ import {
   clearJustCompleted,
   setRunning,
   setCurrentStep,
-} from '../OnboardingProgressSlice';
+} from '@/shared/state/onboardingProgressSlice';
 import { report, markStepStarted, clearStepTiming } from '../telemetry';
 import { onboardingBus, type OnboardingEvent } from '../eventBus';
 import { waitForSelector, resolveSelector } from '../selectors';

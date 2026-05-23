@@ -12,7 +12,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 import { useAppDispatch } from '@/shared/hooks';
 import { useOnboardingProgress } from './hooks/useOnboardingProgress';
-import { clearJustCompleted } from './OnboardingProgressSlice';
+import { clearJustCompleted } from '@/shared/state/onboardingProgressSlice';
 import { STEPS, findStepById } from './steps';
 import { STAGE_LABELS } from './steps/types';
 import { onboardingDirector } from './OnboardingDirector';

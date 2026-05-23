@@ -7,7 +7,7 @@ import Switch from '@mui/material/Switch';
 import { useAppDispatch, useAppSelector } from '@/shared/hooks';
 import { closeSettingsModal, AppSettings } from '@/shared/state/settingsSlice';
 import { onboardingBus } from '@/app/components/Onboarding/eventBus';
-import { resetTour } from '@/app/components/Onboarding/OnboardingProgressSlice';
+import { resetTour } from '@/shared/state/onboardingProgressSlice';
 import { useClaudeTokens } from '@/shared/styles/ThemeContext';
 import TrustedFilePatterns from '@/app/components/TrustedFilePatterns';
 import SoftwareUpdateRow from './SoftwareUpdateRow';

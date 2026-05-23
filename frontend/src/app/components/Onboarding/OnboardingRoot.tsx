@@ -12,7 +12,7 @@ import {
   loadFromStorage,
   persistToStorage,
   markStepCompleted,
-} from './OnboardingProgressSlice';
+} from '@/shared/state/onboardingProgressSlice';
 import AgenticCursor, { type AgenticCursorHandle } from './ac/AgenticCursor';
 import { onboardingDirector } from './OnboardingDirector';
 import { STEPS } from './steps';
