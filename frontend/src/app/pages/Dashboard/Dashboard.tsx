@@ -78,6 +78,10 @@ import { API_BASE } from '@/shared/config';
 import { useTethers } from './dashboardTethers';
 import TetherLayer from './TetherLayer';
 import { useArrowNav } from './useArrowNav';
+import { useDashboardShortcuts } from './useDashboardShortcuts';
+import { useDashboardClipboard } from './useDashboardClipboard';
+import { useCardDrag } from './useCardDrag';
+import { useSubAgentLifecycle } from './useSubAgentLifecycle';
 
 const SELECT_ATTR = 'data-select-type';
 
@@ -218,112 +222,21 @@ const DashboardInner: React.FC<DashboardProps> = ({ dashboardId, isActive = true
   canvasStateRef.current = { panX: canvas.panX, panY: canvas.panY, zoom: canvas.zoom };
   // Stable getter , AgentCards read pan/zoom on demand during drag math.
   const getCanvasState = useCallback(() => canvasStateRef.current, []);
-  // Notify the currently dragging card (if any) that pan/zoom changed so
-  // it can re-pin to the cursor. useEffect rather than render-body
-  // dispatchEvent: side effects during render are a React anti-pattern
-  // and can fire twice in strict mode. Effect runs after commit, so
-  // exactly once per real pan/zoom delta.
-  useEffect(() => {
-    window.dispatchEvent(new Event('openswarm:canvas-pan-changed'));
-  }, [canvas.panX, canvas.panY, canvas.zoom]);
 
-  // ---- Edge panning during card drag ----
-  const EDGE_ZONE = 60;
-  const EDGE_MAX_SPEED = 8;
-  const edgePanFrameRef = useRef<number | null>(null);
-  const lastMousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
-  // Track pan at drag start so cards can compensate for edge-pan offset
-  const dragStartPanRef = useRef<{ panX: number; panY: number }>({ panX: 0, panY: 0 });
-
-  const stopEdgePan = useCallback(() => {
-    if (edgePanFrameRef.current) {
-      cancelAnimationFrame(edgePanFrameRef.current);
-      edgePanFrameRef.current = null;
-    }
-  }, []);
-
-  const tickEdgePan = useCallback(() => {
-    const vp = canvas.viewportRef.current;
-    if (!vp) return;
-    const rect = vp.getBoundingClientRect();
-    const { x: mx, y: my } = lastMousePosRef.current;
-
-    let dx = 0;
-    let dy = 0;
-
-    if (mx < rect.left + EDGE_ZONE) {
-      dx = EDGE_MAX_SPEED * ((rect.left + EDGE_ZONE - mx) / EDGE_ZONE);
-    } else if (mx > rect.right - EDGE_ZONE) {
-      dx = -EDGE_MAX_SPEED * ((mx - (rect.right - EDGE_ZONE)) / EDGE_ZONE);
-    }
-    if (my < rect.top + EDGE_ZONE) {
-      dy = EDGE_MAX_SPEED * ((rect.top + EDGE_ZONE - my) / EDGE_ZONE);
-    } else if (my > rect.bottom - EDGE_ZONE) {
-      dy = -EDGE_MAX_SPEED * ((my - (rect.bottom - EDGE_ZONE)) / EDGE_ZONE);
-    }
-
-    if (dx !== 0 || dy !== 0) {
-      canvas.actions.setState((prev: { panX: number; panY: number; zoom: number }) => ({
-        ...prev,
-        panX: prev.panX + dx,
-        panY: prev.panY + dy,
-      }));
-    }
-
-    edgePanFrameRef.current = requestAnimationFrame(tickEdgePan);
-  }, [canvas.viewportRef, canvas.actions]);
-
-  // ---- Multi-drag coordination ----
-  const [multiDragDelta, setMultiDragDelta] = useState<{ dx: number; dy: number } | null>(null);
-  const [liveDragInfo, setLiveDragInfo] = useState<{ cardId: string; dx: number; dy: number } | null>(null);
-  const activeDragCardRef = useRef<string | null>(null);
-  const isMultiDragRef = useRef(false);
-
-  const edgePanStartedRef = useRef(false);
-
-  const handleCardDragStart = useCallback((id: string, _type: CardType) => {
-    activeDragCardRef.current = id;
-    edgePanStartedRef.current = false;
-    if (selection.isSelected(id)) {
-      isMultiDragRef.current = true;
-    } else {
-      selection.deselectAll();
-      isMultiDragRef.current = false;
-    }
-  }, [selection]);
-
-  const handleCardDragMove = useCallback((dx: number, dy: number, mouseX?: number, mouseY?: number) => {
-    if (mouseX !== undefined && mouseY !== undefined) {
-      lastMousePosRef.current = { x: mouseX, y: mouseY };
-    }
-    // Start edge panning only once actual dragging begins
-    if (!edgePanStartedRef.current) {
-      edgePanStartedRef.current = true;
-      edgePanFrameRef.current = requestAnimationFrame(tickEdgePan);
-    }
-    if (isMultiDragRef.current) {
-      setMultiDragDelta({ dx, dy });
-    }
-    if (activeDragCardRef.current) {
-      setLiveDragInfo({ cardId: activeDragCardRef.current, dx, dy });
-    }
-  }, [tickEdgePan]);
-
-  const handleCardDragEnd = useCallback((dx: number, dy: number, didDrag: boolean) => {
-    if (didDrag) report('dashboard', 'card_dragged');
-    stopEdgePan();
-    if (isMultiDragRef.current && didDrag) {
-      const items = selection.selectedArray()
-        .filter((s) => s.id !== activeDragCardRef.current);
-      if (items.length > 0) {
-        dispatch(moveCards({ items, dx, dy }));
-      }
-    }
-    activeDragCardRef.current = null;
-    isMultiDragRef.current = false;
-    setMultiDragDelta(null);
-    setLiveDragInfo(null);
-  }, [selection, dispatch, stopEdgePan]);
+  const {
+    multiDragDelta,
+    liveDragInfo,
+    handleCardDragStart,
+    handleCardDragMove,
+    handleCardDragEnd,
+  } = useCardDrag({
+    panX: canvas.panX,
+    panY: canvas.panY,
+    zoom: canvas.zoom,
+    viewportRef: canvas.viewportRef,
+    canvasActions: canvas.actions,
+    selection,
+  });
 
   // Helper: get a card's rect from Redux state (uses collapsed height for zoom calculation)
   const getCardRect = useCallback((id: string, type: CardType) => {
@@ -708,111 +621,14 @@ const DashboardInner: React.FC<DashboardProps> = ({ dashboardId, isActive = true
   }, [layoutInitialized, outputsLoaded, viewCards, outputs, dispatch]);
 
   // ---- Auto-reveal / collapse / unreveal sub-agent cards ----
-  const autoRevealedRef = useRef(new Set<string>());
-  const prevSubStatusRef = useRef<Record<string, string>>({});
-  const prevParentStatusRef = useRef<Record<string, string>>({});
-
-  useEffect(() => {
-    if (!isActive) return;  // Heavy logic , pause when dashboard is hidden
-    if (!layoutInitialized || !autoRevealSubAgents) return;
-
-    const subSessions = Object.values(sessions).filter(
-      (s) => (s.mode === 'sub-agent' || s.mode === 'invoked-agent') && s.parent_session_id,
-    );
-
-    // 1) Auto-reveal newly spawned sub-agents (skip already-terminal ones on load)
-    for (const sub of subSessions) {
-      if (autoRevealedRef.current.has(sub.id)) continue;
-      if (cards[sub.id]) {
-        autoRevealedRef.current.add(sub.id);
-        continue;
-      }
-      const parentCard = cards[sub.parent_session_id!];
-      if (!parentCard) continue;
-
-      const isTerminal = sub.status === 'completed' || sub.status === 'error' || sub.status === 'stopped';
-      const parentSession = sessions[sub.parent_session_id!];
-      const parentTerminal = parentSession &&
-        (parentSession.status === 'completed' || parentSession.status === 'error' || parentSession.status === 'stopped');
-      if (isTerminal && parentTerminal) {
-        autoRevealedRef.current.add(sub.id);
-        continue;
-      }
-
-      autoRevealedRef.current.add(sub.id);
-
-      const targetX = parentCard.x + parentCard.width + GRID_GAP * 12;
-      let targetY = parentCard.y;
-      const columnCards = Object.values(cards).filter(
-        (c) => Math.abs(c.x - targetX) < 50 && c.session_id !== sub.id,
-      );
-      if (columnCards.length > 0) {
-        const lowestBottom = Math.max(
-          ...columnCards.map((c) => c.y + Math.max(EXPANDED_CARD_MIN_H, c.height)),
-        );
-        targetY = lowestBottom + GRID_GAP;
-      }
-
-      dispatch(placeCard({
-        sessionId: sub.id,
-        x: targetX,
-        y: targetY,
-        width: DEFAULT_CARD_W,
-        height: DEFAULT_CARD_H,
-        // Pass the current expanded-session set so placeCard's
-        // collision check uses real visual heights (expanded cards
-        // render ~620px tall instead of their stored collapsed
-        // height). Without this, sub-agents spawn into space the
-        // parent card visually occupies.
-        expandedSessionIds,
-      }));
-      dispatch(expandSession(sub.id));
-      const label = sub.mode === 'sub-agent' ? 'Create Agent' : 'Invoke Agent';
-      dispatch(setGlowingAgentCard({ sessionId: sub.id, sourceId: sub.parent_session_id!, label }));
-
-      if (sub.status === 'completed' || sub.status === 'error' || sub.status === 'stopped') {
-        const subId = sub.id;
-        setTimeout(() => dispatch(collapseSession(subId)), 2000);
-      }
-    }
-
-    // 2) Auto-collapse sub-agents when they complete
-    const TERMINAL = new Set(['completed', 'error', 'stopped']);
-    for (const sub of subSessions) {
-      const prev = prevSubStatusRef.current[sub.id];
-      if (prev !== sub.status && TERMINAL.has(sub.status) && cards[sub.id]) {
-        dispatch(collapseSession(sub.id));
-      }
-    }
-    const newSubStatuses: Record<string, string> = {};
-    for (const sub of subSessions) { newSubStatuses[sub.id] = sub.status; }
-    prevSubStatusRef.current = newSubStatuses;
-
-    // 3) Unreveal all sub-agent cards when parent finishes output
-    const parentIds = new Set(subSessions.map((s) => s.parent_session_id!));
-    for (const pid of parentIds) {
-      const parent = sessions[pid];
-      if (!parent) continue;
-      const prev = prevParentStatusRef.current[pid];
-      if (prev !== parent.status && TERMINAL.has(parent.status)) {
-        const children = subSessions.filter((s) => s.parent_session_id === pid);
-        for (const child of children) {
-          if (!cards[child.id]) continue;
-          dispatch(collapseSession(child.id));
-          dispatch(removeCard(child.id));
-          setTimeout(() => {
-            dispatch(clearGlowingAgentCard(child.id));
-          }, 500);
-        }
-      }
-    }
-    const newParentStatuses: Record<string, string> = {};
-    for (const pid of parentIds) {
-      const parent = sessions[pid];
-      if (parent) newParentStatuses[pid] = parent.status;
-    }
-    prevParentStatusRef.current = newParentStatuses;
-  }, [isActive, sessions, cards, layoutInitialized, autoRevealSubAgents, dispatch]);
+  useSubAgentLifecycle({
+    isActive,
+    sessions,
+    cards,
+    layoutInitialized,
+    autoRevealSubAgents,
+    expandedSessionIds,
+  });
 
   const skipInitialSave = useRef(true);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -849,195 +665,25 @@ const DashboardInner: React.FC<DashboardProps> = ({ dashboardId, isActive = true
     };
   }, [dispatch]);
 
-  useEffect(() => {
-    const parts = newAgentShortcut.toLowerCase().split('+');
-    const key = parts[parts.length - 1];
-    const needsMeta = parts.includes('meta');
-    const needsCtrl = parts.includes('ctrl');
-    const needsShift = parts.includes('shift');
-    const needsAlt = parts.includes('alt');
+  useDashboardShortcuts({
+    isActive,
+    newAgentShortcut,
+    selection,
+    setToolbarOpen,
+    setSearchPaletteOpen,
+  });
 
-    const handleShortcut = (e: KeyboardEvent) => {
-      if (!isActive) return;  // Don't fire shortcuts when dashboard is hidden
-      if (e.key.toLowerCase() !== key) return;
-      if (needsMeta !== e.metaKey) return;
-      if (needsCtrl !== e.ctrlKey) return;
-      if (needsShift !== e.shiftKey) return;
-      if (needsAlt !== e.altKey) return;
-      e.preventDefault();
-      setToolbarOpen(true);
-    };
-    window.addEventListener('keydown', handleShortcut);
-    return () => window.removeEventListener('keydown', handleShortcut);
-  }, [newAgentShortcut]);
-
-  useEffect(() => {
-    const handleEnter = (e: KeyboardEvent) => {
-      if (!isActive) return;  // Don't fire shortcuts when dashboard is hidden
-      if (e.key !== 'Enter') return;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
-      if (selection.selectedIds.size !== 1) return;
-      const [id, type] = selection.selectedIds.entries().next().value!;
-      if (type !== 'agent') return;
-      e.preventDefault();
-      dispatch(toggleExpandSession(id));
-    };
-    window.addEventListener('keydown', handleEnter);
-    return () => window.removeEventListener('keydown', handleEnter);
-  }, [selection.selectedIds, dispatch]);
-
-  useEffect(() => {
-    const handleDelete = (e: KeyboardEvent) => {
-      if (!isActive) return;  // Don't fire shortcuts when dashboard is hidden
-      if (e.key !== 'Backspace' && e.key !== 'Delete') return;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
-      if (selection.selectedIds.size === 0) return;
-      e.preventDefault();
-      for (const [id, type] of selection.selectedIds) {
-        if (type === 'agent') {
-          dispatch(closeSession({ sessionId: id }));
-        } else if (type === 'view') {
-          dispatch(removeViewCard(id));
-        } else if (type === 'browser') {
-          dispatch(removeBrowserCard(id));
-        } else if (type === 'note') {
-          dispatch(removeNote(id));
-        }
-      }
-      selection.deselectAll();
-    };
-    window.addEventListener('keydown', handleDelete);
-    return () => window.removeEventListener('keydown', handleDelete);
-  }, [selection, dispatch]);
-
-  // Cmd+F to open card search palette
-  useEffect(() => {
-    const handleSearch = (e: KeyboardEvent) => {
-      if (!isActive) return;  // Don't fire shortcuts when dashboard is hidden
-      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'f') return;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
-      e.preventDefault();
-      setSearchPaletteOpen(true);
-      report('dashboard', 'search_opened');
-    };
-    window.addEventListener('keydown', handleSearch);
-    return () => window.removeEventListener('keydown', handleSearch);
-  }, []);
-
-  useEffect(() => {
-    const handleCopy = (e: KeyboardEvent) => {
-      if (!isActive) return;  // Don't fire shortcuts when dashboard is hidden
-      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'c') return;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
-      if (selection.selectedIds.size === 0) return;
-
-      e.preventDefault();
-      const copied: ClipboardCard[] = [];
-      const names: string[] = [];
-      for (const [id, type] of selection.selectedIds) {
-        if (type === 'agent') {
-          const session = sessions[id];
-          const card = cards[id];
-          if (!session || !card) continue;
-          copied.push({
-            type, id, name: session.name || id,
-            meta: { name: session.name, status: session.status, model: session.model, mode: session.mode },
-            x: card.x, y: card.y, width: card.width, height: card.height,
-            expanded: expandedSessionIds.includes(id),
-          });
-          names.push(session.name || id);
-        } else if (type === 'view') {
-          const output = outputs[id];
-          const vc = viewCards[id];
-          if (!output || !vc) continue;
-          copied.push({
-            type, id, name: output.name,
-            meta: { name: output.name, description: output.description },
-            x: vc.x, y: vc.y, width: vc.width, height: vc.height,
-          });
-          names.push(output.name);
-        } else if (type === 'browser') {
-          const bc = browserCards[id];
-          if (!bc) continue;
-          const activeTab = bc.tabs.find((t) => t.id === bc.activeTabId);
-          const title = activeTab?.title || 'Browser';
-          copied.push({
-            type, id, name: title,
-            meta: { name: title, url: activeTab?.url || bc.url, tabs: bc.tabs },
-            x: bc.x, y: bc.y, width: bc.width, height: bc.height,
-          });
-          names.push(title);
-        }
-      }
-      setClipboardCards(copied);
-      navigator.clipboard.writeText(names.join(', ')).catch(() => {});
-    };
-    window.addEventListener('keydown', handleCopy);
-    return () => window.removeEventListener('keydown', handleCopy);
-  }, [selection.selectedIds, sessions, cards, viewCards, browserCards, outputs, expandedSessionIds]);
-
-  useEffect(() => {
-    const PASTE_OFFSET = 40;
-    const handlePaste = async (e: KeyboardEvent) => {
-      if (!isActive) return;  // Don't fire shortcuts when dashboard is hidden
-      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'v') return;
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
-
-      const copied = getClipboardCards();
-      if (copied.length === 0) return;
-      e.preventDefault();
-
-      selection.deselectAll();
-      const newSelection = new Map<string, CardType>();
-
-      for (const card of copied) {
-        const px = card.x + PASTE_OFFSET;
-        const py = card.y - PASTE_OFFSET;
-
-        if (card.type === 'agent') {
-          const action = await dispatch(duplicateSession({ sessionId: card.id, dashboardId }));
-          if (duplicateSession.fulfilled.match(action)) {
-            const newId = action.payload.id;
-            dispatch(placeCard({
-              sessionId: newId,
-              x: px,
-              y: py,
-              width: card.width,
-              height: card.height,
-              expandedSessionIds,
-            }));
-            if (card.expanded) {
-              dispatch(expandSession(newId));
-            }
-            newSelection.set(newId, 'agent');
-          }
-        } else if (card.type === 'view') {
-          dispatch(addViewCard({ outputId: card.id, expandedSessionIds, x: px, y: py, width: card.width, height: card.height }));
-          newSelection.set(card.id, 'view');
-        } else if (card.type === 'browser') {
-          const browserId = `browser-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-          dispatch(pasteBrowserCard({
-            id: browserId, tabs: card.meta.tabs || [], url: card.meta.url || '',
-            x: px, y: py, width: card.width, height: card.height,
-          }));
-          newSelection.set(browserId, 'browser');
-        }
-      }
-
-      if (newSelection.size > 0) {
-        for (const [id, type] of newSelection) {
-          selection.selectCard(id, type, true);
-        }
-      }
-    };
-    window.addEventListener('keydown', handlePaste);
-    return () => window.removeEventListener('keydown', handlePaste);
-  }, [dispatch, dashboardId, expandedSessionIds, selection]);
+  useDashboardClipboard({
+    isActive,
+    dashboardId,
+    selection,
+    sessions,
+    cards,
+    viewCards,
+    browserCards,
+    outputs,
+    expandedSessionIds,
+  });
 
   // ---- Arrow key card navigation (when zoomed in on a card) ----
   const { neighborDirections, shakeDirection } = useArrowNav({
