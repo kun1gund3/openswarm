@@ -52,7 +52,6 @@ from backend.apps.agents.aux_llm import _safe_resp_text
 from backend.apps.agents.history_compaction import (
     _build_history_prefix,
     _get_branch_messages,
-    _summarize_message_block,
     _truncate_large_tool_result,
 )
 from backend.apps.agents.prompt_context import (

@@ -62,64 +62,6 @@ def _build_history_prefix(messages) -> str:
     return "<prior_conversation>\n" + "\n".join(lines) + "\n</prior_conversation>"
 
 
-def _summarize_message_block(messages: list) -> str:
-    """Programmatic, no-LLM summary of a message slice. Mirrors the
-    shape of browser_agent._summarize_messages: extracts the original
-    user task, counts tool calls, captures the last assistant text.
-    Cheap, deterministic, and never makes a network call, so
-    compaction itself adds zero latency to the user's turn.
-    """
-    if not messages:
-        return ""
-
-    initial_task = ""
-    for m in messages:
-        if getattr(m, "role", "") == "user":
-            content = getattr(m, "content", "")
-            txt = content if isinstance(content, str) else str(content)
-            if txt.strip():
-                initial_task = txt.strip()[:400]
-                break
-
-    tool_calls_by_name: dict[str, int] = {}
-    last_tool_results = 0
-    last_assistant_text = ""
-    for m in messages:
-        role = getattr(m, "role", "")
-        if role == "tool_call":
-            content = getattr(m, "content", {}) or {}
-            name = (content.get("tool") if isinstance(content, dict) else None) or "unknown"
-            tool_calls_by_name[name] = tool_calls_by_name.get(name, 0) + 1
-        elif role == "tool_result":
-            last_tool_results += 1
-        elif role == "assistant":
-            content = getattr(m, "content", "")
-            if isinstance(content, str) and content.strip():
-                last_assistant_text = content.strip()
-            elif isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        txt = (block.get("text") or "").strip()
-                        if txt:
-                            last_assistant_text = txt
-
-    parts = ["<compacted_history>"]
-    parts.append("[The following is a programmatic summary of earlier turns in this session. Originals are preserved on disk and viewable via the chat UI's compaction drawer.]")
-    if initial_task:
-        parts.append(f'Initial user request: "{initial_task}"')
-    if tool_calls_by_name:
-        total = sum(tool_calls_by_name.values())
-        top = sorted(tool_calls_by_name.items(), key=lambda kv: -kv[1])[:8]
-        parts.append(f"Tool calls so far ({total} total): " + ", ".join(f"{n}×{c}" for n, c in top))
-    if last_tool_results:
-        parts.append(f"Tool results received: {last_tool_results}")
-    if last_assistant_text:
-        parts.append("Last assistant message:")
-        parts.append(last_assistant_text[:1200])
-    parts.append("</compacted_history>")
-    return "\n".join(parts)
-
-
 def _truncate_large_tool_result(content: object, session_id: str, msg_id: str, max_bytes: int = 50_000) -> tuple[object, str | None]:
     """Spill a large tool_result body to disk, return a truncated
     inline replacement plus the on-disk path (or None if untouched).
