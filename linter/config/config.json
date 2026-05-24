@@ -13,7 +13,8 @@
     "no-nested-imports": "Off on purpose: this codebase uses function-level/lazy imports to break import cycles (400+ sites). Flagging them all is wrong for us.",
     "eslint-knip": "Node tooling deferred to a later pass.",
     "classes": "Placeholder check, not wired up. endpoints: orphaned-endpoint triage deferred.",
-    "max-file-lines-exceptions": "Grandfather list of pre-existing >300-line files (existing debt, not new). Paths updated after the folder-tree restructure moved several of them."
+    "max-file-lines-exceptions": "Grandfather list of pre-existing >300-line files (existing debt, not new). Paths updated after the folder-tree restructure moved several of them.",
+    "max-folder-items-exceptions": "Exact-path allow for folders that are intentionally big. backend/ and backend/apps are FastAPI feature-package registries (each child is an app mounted in main.py); agents/ aggregates agent subsystems; core/, service/, tools_lib/, tests/ are conventionally flat. These replaced a blanket backend/.lintignore-max-folder-items so the rule still catches NEW unplanned bloat in every other folder. The webapp_template Vite scaffold is a payload, exempted as a whole subtree by its own .lintignore-max-folder-items (same as vendored mcp-bundles)."
   },
   "rules": {
     "max-file-lines": 300,
@@ -126,7 +127,16 @@
       "frontend/src/shared/state/dashboardLayoutSlice.ts",
       "frontend/src/shared/ws/WebSocketManager.ts"
     ],
-    "max-folder-items": [],
+    "max-folder-items": [
+      "backend",
+      "backend/apps",
+      "backend/apps/agents",
+      "backend/apps/agents/core",
+      "backend/apps/outputs",
+      "backend/apps/service",
+      "backend/apps/tools_lib",
+      "backend/tests"
+    ],
     "no-nested-imports": [],
     "vulture": ["backend/tests/*"],
     "endpoints": [],
